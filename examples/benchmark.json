@@ -1,0 +1,11 @@
+{
+  "id": "fix-notification-migration",
+  "description": "Fix the failing notification settings migration",
+  "repository": ".",
+  "startingCommit": "HEAD",
+  "timeoutMs": 900000,
+  "validation": { "test": "npm test", "typecheck": "npm run typecheck" },
+  "expectedOutcome": { "testsPass": true, "typecheckPasses": true },
+  "maximumCostUsd": 5,
+  "tags": ["migration"]
+}

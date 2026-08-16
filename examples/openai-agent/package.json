@@ -1,0 +1,11 @@
+{
+  "name": "tokenfaxx-openai-agent-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts"
+  },
+  "dependencies": {
+    "@tokenfaxx/sdk": "workspace:*"
+  }
+}
