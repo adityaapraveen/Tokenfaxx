@@ -8,7 +8,7 @@ TokenFaxx evaluates a session—not a developer. Token counts and lines changed 
 
 ## What works today
 
-- Local SQLite storage with foreign keys, WAL mode, retention, exports, and deletion commands.
+- Local SQLite storage with foreign keys, WAL mode, transactional/idempotent event projection, retention, exports, and deletion commands.
 - Codex, Claude, generic shell-command, and instrumented SDK adapters.
 - Before/after Git snapshots plus a metadata-only file activity timeline.
 - Opt-in test, build, lint, and typecheck validation with bounded live output.

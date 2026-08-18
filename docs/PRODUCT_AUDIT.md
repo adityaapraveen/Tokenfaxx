@@ -16,7 +16,7 @@ AI should not replace deterministic evidence. Its appropriate roles here are tas
 | Area                | Present              | Maturity   | Main gap                                                           |
 | ------------------- | -------------------- | ---------- | ------------------------------------------------------------------ |
 | CLI orchestration   | Yes                  | Alpha      | Large command module, limited input validation and recovery        |
-| Local storage       | Yes, SQLite/Drizzle  | Alpha      | Embedded ad-hoc migrations and non-atomic event projection         |
+| Local storage       | Yes, SQLite/Drizzle  | Alpha/Beta | Embedded ad-hoc migrations; event projection is now atomic         |
 | Git evidence        | Yes                  | Alpha/Beta | Metadata association is not causation; force-kill recovery missing |
 | Validation          | Yes                  | Alpha      | Parsers are heuristic; coverage is declared but not populated      |
 | Scoring             | Yes                  | Alpha      | Fixed baselines are uncalibrated and some inputs are unreachable   |
@@ -212,7 +212,9 @@ Replace this with ordered immutable migration files, checksums, transactional ap
 
 ### Atomicity
 
-`appendEvent` writes the event and then writes a normalized projection in separate statements. A projection failure can leave inconsistent state. Wrap each append/projection in one SQLite transaction. Add idempotency handling for repeated provider callbacks.
+Status: implemented on 2026-08-18.
+
+`appendEvent` now validates session context, writes the immutable event and normalized projection in one SQLite transaction, treats identical event-ID retries as no-ops, and rejects conflicting ID reuse. Tests force a projection failure and verify that the event is rolled back. The next storage step is replacing the embedded migration bootstrap with ordered immutable migrations and adding idempotency keys to future remote ingestion endpoints.
 
 ### Module boundaries
 
@@ -293,7 +295,7 @@ These are release blockers for a public product, not cosmetic tasks.
 
 1. Wire documented exact usage channels for Codex/Claude CLI adapters; configured SDK pricing is complete.
 2. Evaluate benchmark `expectedOutcome` and definition hashes.
-3. Replace migrations and make event projection atomic.
+3. Replace the embedded migration bootstrap; transactional/idempotent event projection is complete.
 4. Add stale-session recovery and idempotent completion.
 5. Constrain result files and complete privacy/security regression tests.
 6. Add CI across supported OS/Node versions and require typecheck/test/build.
@@ -334,10 +336,10 @@ Exit gate: tenant isolation, deletion, auditability, SLOs, incident response, an
 
 For the next engineering sessions, do this in order:
 
-1. Implement transactional event append/projection and idempotency.
-2. Make benchmark expectations produce a stored verdict and failing exit code.
-3. Add stale-session recovery to `doctor` with an explicit `--repair` action.
-4. Create CI and clean-install smoke tests.
+1. Make benchmark expectations produce a stored verdict and failing exit code.
+2. Add stale-session recovery to `doctor` with an explicit `--repair` action.
+3. Create CI and clean-install smoke tests.
+4. Replace the embedded migration bootstrap with ordered migration files.
 5. Only then start GitHub enrichment.
 
 This sequence improves evidence correctness and operational safety before adding more surface area.
