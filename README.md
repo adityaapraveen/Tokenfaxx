@@ -91,6 +91,19 @@ export default defineConfig({
     timeoutMs: 30_000,
     maxCostUsd: 0.05,
   },
+  pricing: {
+    custom: [
+      {
+        provider: "openai",
+        model: "provider-returned-model-id",
+        inputPerMillionUsd: 1.25,
+        cachedInputPerMillionUsd: 0.125,
+        outputPerMillionUsd: 10,
+        effectiveDate: "2026-08-01",
+        source: "approved provider pricing",
+      },
+    ],
+  },
 });
 ```
 
@@ -218,11 +231,27 @@ Package responsibilities:
 CLI wrappers cannot reliably derive exact usage from decorative terminal output. For accurate tokens, models, cost, and tool events, record official provider response fields through the SDK:
 
 ```ts
+import { defineConfig } from "@tokenfaxx/core";
 import { TokenFaxx } from "@tokenfaxx/sdk";
 
 const tracker = new TokenFaxx({
   agent: "custom-agent",
   repository: process.cwd(),
+  config: defineConfig({
+    pricing: {
+      custom: [
+        {
+          provider: "openai",
+          model: "provider-returned-model-id",
+          inputPerMillionUsd: 1.25,
+          cachedInputPerMillionUsd: 0.125,
+          outputPerMillionUsd: 10,
+          effectiveDate: "2026-08-01",
+          source: "approved provider pricing",
+        },
+      ],
+    },
+  }),
 });
 
 const session = await tracker.startSession({
@@ -241,7 +270,6 @@ await session.recordModelUsage({
   inputTokens: 8_200,
   outputTokens: 2_100,
   cachedInputTokens: 4_000,
-  estimatedCostUsd: 0.42,
   measurement: "reported",
   source: "official provider response",
 });
@@ -263,6 +291,21 @@ tracker.close();
 ```
 
 Do not estimate unavailable provider fields. Preserve `null` so reports remain honest.
+
+If `estimatedCostUsd` is absent and provider, model, input tokens, and output tokens exactly match one configured price, the SDK calculates cost. It stores cost provenance and the pricing effective date separately from token provenance. A caller-supplied cost is never overwritten. When supplying an official provider cost, label it explicitly:
+
+```ts
+await session.recordModelUsage({
+  provider: "openai",
+  model: "provider-returned-model-id",
+  inputTokens: 8_200,
+  outputTokens: 2_100,
+  estimatedCostUsd: 0.42,
+  costMeasurement: "provider-reported",
+  costSource: "official provider response",
+  measurement: "reported",
+});
+```
 
 ## Scoring and accuracy
 

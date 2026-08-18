@@ -1,11 +1,14 @@
 import path from "node:path";
 import {
+  calculateConfiguredCost,
+  defaultConfig,
   EVENT_SCHEMA_VERSION,
   type EventType,
   type SessionStatus,
   taskProfileSchema,
   type TaskOutcomeStatus,
   type TaskProfile,
+  type TokenFaxxConfig,
 } from "@tokenfaxx/core";
 import { createId, nowIso, redactSecrets } from "@tokenfaxx/shared";
 import { TokenFaxxDatabase } from "@tokenfaxx/storage";
@@ -15,6 +18,7 @@ export interface TokenFaxxOptions {
   repository: string;
   adapterVersion?: string;
   databasePath?: string;
+  config?: TokenFaxxConfig;
 }
 export interface StartSessionOptions {
   taskId?: string;
@@ -30,6 +34,9 @@ export interface ModelUsage {
   reasoningTokens?: number | null;
   totalTokens?: number | null;
   estimatedCostUsd?: number | null;
+  costMeasurement?: "provider-reported" | "calculated" | "estimated";
+  costSource?: string;
+  pricingEffectiveDate?: string;
   measurement: "exact" | "reported" | "calculated" | "estimated";
   source?: string;
 }
@@ -38,6 +45,7 @@ export class TrackedSession {
     readonly id: string,
     private readonly options: TokenFaxxOptions,
     private readonly db: TokenFaxxDatabase,
+    private readonly config: TokenFaxxConfig,
     private readonly taskId?: string,
   ) {}
   private record(
@@ -59,7 +67,43 @@ export class TrackedSession {
     });
   }
   async recordModelUsage(usage: ModelUsage): Promise<void> {
-    this.record("model.usage", usage as unknown as Record<string, unknown>);
+    let recorded: ModelUsage = usage;
+    if (
+      usage.estimatedCostUsd == null &&
+      usage.model != null &&
+      usage.inputTokens != null &&
+      usage.outputTokens != null
+    ) {
+      const calculated = calculateConfiguredCost(
+        {
+          provider: usage.provider,
+          model: usage.model,
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          ...(usage.cachedInputTokens != null
+            ? { cachedInputTokens: usage.cachedInputTokens }
+            : {}),
+        },
+        this.config,
+      );
+      if (calculated)
+        recorded = {
+          ...usage,
+          estimatedCostUsd: calculated.usd,
+          costMeasurement: calculated.measurement,
+          costSource: calculated.source,
+          ...(calculated.effectiveDate
+            ? { pricingEffectiveDate: calculated.effectiveDate }
+            : {}),
+        };
+    } else if (usage.estimatedCostUsd != null && !usage.costMeasurement) {
+      recorded = {
+        ...usage,
+        costMeasurement: "estimated",
+        costSource: usage.costSource ?? usage.source ?? "SDK caller",
+      };
+    }
+    this.record("model.usage", recorded as unknown as Record<string, unknown>);
   }
   async recordToolCall(call: {
     tool: string;
@@ -112,7 +156,9 @@ export class TrackedSession {
 }
 export class TokenFaxx {
   private readonly db: TokenFaxxDatabase;
+  private readonly config: TokenFaxxConfig;
   constructor(private readonly options: TokenFaxxOptions) {
+    this.config = options.config ?? defaultConfig();
     this.db = new TokenFaxxDatabase(
       options.databasePath ??
         path.join(options.repository, ".tokenfaxx", "tokenfaxx.db"),
@@ -133,6 +179,7 @@ export class TokenFaxx {
       row.id,
       this.options,
       this.db,
+      this.config,
       input.taskId,
     );
     await session.recordEvent("session.started", {

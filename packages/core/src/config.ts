@@ -78,6 +78,19 @@ export const configSchema = z.object({
             source: z.string().optional(),
           }),
         )
+        .superRefine((prices, context) => {
+          const seen = new Set<string>();
+          prices.forEach((price, index) => {
+            const key = `${price.provider}\u0000${price.model}`;
+            if (seen.has(key))
+              context.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: `Duplicate pricing for ${price.provider}/${price.model}`,
+                path: [index],
+              });
+            seen.add(key);
+          });
+        })
         .default([]),
     })
     .default({ custom: [] }),

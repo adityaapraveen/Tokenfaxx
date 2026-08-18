@@ -44,6 +44,11 @@ const payloadSchemas = {
     reasoningTokens: nonnegativeInt.nullable().optional(),
     totalTokens: nonnegativeInt.nullable().optional(),
     estimatedCostUsd: z.number().nonnegative().nullable().optional(),
+    costMeasurement: z
+      .enum(["provider-reported", "calculated", "estimated"])
+      .optional(),
+    costSource: z.string().optional(),
+    pricingEffectiveDate: z.string().optional(),
     measurement: z.enum(["exact", "reported", "calculated", "estimated"]),
     source: z.string().optional(),
   }),

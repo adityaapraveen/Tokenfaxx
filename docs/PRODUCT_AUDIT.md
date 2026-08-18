@@ -64,11 +64,11 @@ Acceptance criteria:
 - Every usage record includes provider, actual model, measurement type, source, and nullable fields.
 - Adapter failure never silently converts unavailable usage to zero.
 
-### 2. Configured pricing is not wired into session evaluation
+### 2. Configured pricing
 
-Where: `packages/core/src/pricing.ts` exists and is tested, but no production path invokes `calculateConfiguredCost`.
+Status: implemented for SDK-reported usage on 2026-08-18.
 
-Implement cost calculation when a usage event has provider/model/input/output but no provider-reported cost. Persist the price source and effective date. Reject ambiguous pricing and never use stale catalog prices silently.
+The SDK now calculates cost when a usage event has provider/model/input/output, no supplied cost, and exactly one configured matching price. Token and cost provenance are stored separately, including price source and effective date. Duplicate provider/model prices are rejected, and caller-supplied costs are never overwritten. Ordinary Codex/Claude CLI sessions still need a documented provider usage channel before this path can apply to them.
 
 ### 3. Task baselines are arbitrary, not calibrated
 
@@ -291,7 +291,7 @@ These are release blockers for a public product, not cosmetic tasks.
 
 ### P0: trustworthy developer preview
 
-1. Wire exact SDK/provider usage and configured pricing end to end.
+1. Wire documented exact usage channels for Codex/Claude CLI adapters; configured SDK pricing is complete.
 2. Evaluate benchmark `expectedOutcome` and definition hashes.
 3. Replace migrations and make event projection atomic.
 4. Add stale-session recovery and idempotent completion.
@@ -334,12 +334,11 @@ Exit gate: tenant isolation, deletion, auditability, SLOs, incident response, an
 
 For the next engineering sessions, do this in order:
 
-1. Add tests proving configured pricing is applied to recorded provider usage without overwriting provider-reported cost.
-2. Implement transactional event append/projection and idempotency.
-3. Make benchmark expectations produce a stored verdict and failing exit code.
-4. Add stale-session recovery to `doctor` with an explicit `--repair` action.
-5. Create CI and clean-install smoke tests.
-6. Only then start GitHub enrichment.
+1. Implement transactional event append/projection and idempotency.
+2. Make benchmark expectations produce a stored verdict and failing exit code.
+3. Add stale-session recovery to `doctor` with an explicit `--repair` action.
+4. Create CI and clean-install smoke tests.
+5. Only then start GitHub enrichment.
 
 This sequence improves evidence correctness and operational safety before adding more surface area.
 
