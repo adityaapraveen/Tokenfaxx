@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NU
 CREATE INDEX IF NOT EXISTS sessions_project_started_idx ON sessions(project_id, started_at); CREATE INDEX IF NOT EXISTS sessions_agent_idx ON sessions(agent); CREATE INDEX IF NOT EXISTS sessions_task_idx ON sessions(task_id);
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, schema_version INTEGER NOT NULL, event_type TEXT NOT NULL, timestamp TEXT NOT NULL, payload TEXT NOT NULL, metadata TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_session_time_idx ON events(session_id, timestamp); CREATE INDEX IF NOT EXISTS events_type_idx ON events(event_type);
-CREATE TABLE IF NOT EXISTS model_usage (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, provider TEXT NOT NULL, model TEXT, input_tokens INTEGER, output_tokens INTEGER, cached_tokens INTEGER, reasoning_tokens INTEGER, total_tokens INTEGER, estimated_cost_usd REAL, measurement_type TEXT NOT NULL, source TEXT, timestamp TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS model_usage (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, provider TEXT NOT NULL, model TEXT, input_tokens INTEGER, output_tokens INTEGER, cached_tokens INTEGER, reasoning_tokens INTEGER, total_tokens INTEGER, estimated_cost_usd REAL, cost_measurement TEXT, cost_source TEXT, pricing_effective_date TEXT, measurement_type TEXT NOT NULL, source TEXT, timestamp TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tool_calls (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, tool TEXT NOT NULL, action_type TEXT NOT NULL, success INTEGER NOT NULL, duration_ms INTEGER NOT NULL, timestamp TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS command_runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, command_category TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER NOT NULL, status TEXT NOT NULL, retry_number INTEGER NOT NULL, timestamp TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS validation_runs (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, validation_type TEXT NOT NULL, command TEXT NOT NULL, status TEXT NOT NULL, exit_code INTEGER, duration_ms INTEGER NOT NULL, started_at TEXT NOT NULL, completed_at TEXT NOT NULL);
@@ -67,11 +67,20 @@ export class TokenFaxxDatabase {
       "details_json",
       "TEXT NOT NULL DEFAULT '{}'",
     );
+    this.ensureColumn("model_usage", "cost_measurement", "TEXT");
+    this.ensureColumn("model_usage", "cost_source", "TEXT");
+    this.ensureColumn("model_usage", "pricing_effective_date", "TEXT");
+    const migrationTimestamp = nowIso();
     this.sqlite
       .prepare(
         "INSERT OR IGNORE INTO _migrations(version, applied_at) VALUES (2, ?)",
       )
-      .run(nowIso());
+      .run(migrationTimestamp);
+    this.sqlite
+      .prepare(
+        "INSERT OR IGNORE INTO _migrations(version, applied_at) VALUES (3, ?)",
+      )
+      .run(migrationTimestamp);
     try {
       fs.chmodSync(filename, 0o600);
     } catch {
@@ -185,6 +194,10 @@ export class TokenFaxxDatabase {
               : inputTokens + outputTokens),
           estimatedCostUsd:
             (p.estimatedCostUsd as number | null | undefined) ?? null,
+          costMeasurement: (p.costMeasurement as string | undefined) ?? null,
+          costSource: (p.costSource as string | undefined) ?? null,
+          pricingEffectiveDate:
+            (p.pricingEffectiveDate as string | undefined) ?? null,
           measurementType: String(p.measurement),
           source: (p.source as string | undefined) ?? null,
           timestamp: event.timestamp,

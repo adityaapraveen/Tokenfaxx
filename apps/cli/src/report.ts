@@ -1,4 +1,8 @@
-import { evidence, type EvidenceValue } from "@tokenfaxx/core";
+import {
+  evidence,
+  type EvidenceMeasurement,
+  type EvidenceValue,
+} from "@tokenfaxx/core";
 import type { SessionBundle } from "@tokenfaxx/storage";
 import { csvEscape } from "@tokenfaxx/shared";
 
@@ -63,6 +67,7 @@ interface ReportData {
     totalTokens: EvidenceValue<number>;
     estimatedCostUsd: EvidenceValue<number>;
     measurement: string | null;
+    costMeasurement: string | null;
   };
   git: {
     filesChanged: EvidenceValue<number>;
@@ -163,6 +168,49 @@ export function reportObject(bundle: SessionBundle): ReportData {
   const usageLimitations = bundle.usage.length
     ? []
     : ["The selected adapter did not report token usage"];
+  const costRows = bundle.usage.filter((item) => item.estimatedCostUsd != null);
+  const costMeasurement = costRows.length
+    ? [
+        ...new Set(costRows.map((item) => item.costMeasurement ?? "unknown")),
+      ].join(",")
+    : null;
+  const costEvidenceMeasurement: EvidenceMeasurement =
+    costMeasurement === "provider-reported"
+      ? "provider-reported"
+      : costMeasurement === "calculated"
+        ? "calculated"
+        : "inferred";
+  const costSource = costRows.length
+    ? [
+        ...new Set(costRows.map((item) => item.costSource ?? "unspecified")),
+      ].join(", ")
+    : "cost was not reported or calculable";
+  const costConfidence = costRows.length
+    ? Math.min(
+        ...costRows.map((item) =>
+          item.costMeasurement === "provider-reported"
+            ? 100
+            : item.costMeasurement === "calculated"
+              ? 85
+              : item.costMeasurement === "estimated"
+                ? 55
+                : 40,
+        ),
+      )
+    : 0;
+  const costLimitations = !costRows.length
+    ? ["No cost was reported and no configured price matched"]
+    : costRows.length !== bundle.usage.length
+      ? [
+          "One or more usage records have no cost; aggregate cost is unavailable",
+        ]
+      : costRows.some(
+            (item) =>
+              item.costMeasurement === "calculated" &&
+              item.pricingEffectiveDate == null,
+          )
+        ? ["One or more calculated costs have no pricing effective date"]
+        : [];
   const details = bundle.score
     ? (JSON.parse(bundle.score.detailsJson) as Record<string, unknown>)
     : {};
@@ -265,13 +313,15 @@ export function reportObject(bundle: SessionBundle): ReportData {
         aggregate(bundle, "totalTokens") === null ? 0 : 100,
         usageLimitations,
       ),
-      estimatedCostUsd: evidenceMetric(
+      estimatedCostUsd: evidence(
         aggregate(bundle, "estimatedCostUsd"),
-        usageSource,
-        aggregate(bundle, "estimatedCostUsd") === null ? 0 : 100,
-        usageLimitations,
+        costEvidenceMeasurement,
+        costSource,
+        aggregate(bundle, "estimatedCostUsd") === null ? 0 : costConfidence,
+        costLimitations,
       ),
       measurement: usageMeasurement,
+      costMeasurement,
     },
     git: {
       branchBefore: before?.branch ?? null,
@@ -366,7 +416,8 @@ export function renderReport(bundle: SessionBundle): string {
     `  Reasoning: ${fmt(usage.reasoningTokens.value)} tokens`,
     `  Total: ${fmt(usage.totalTokens.value)} tokens`,
     `  Cost: ${usage.estimatedCostUsd.value == null ? unavailable : `$${usage.estimatedCostUsd.value.toFixed(4)}`}`,
-    `  Source: ${usage.totalTokens.source}`,
+    `  Token source: ${usage.totalTokens.source}`,
+    `  Cost source: ${usage.estimatedCostUsd.source}${usage.costMeasurement ? ` (${usage.costMeasurement})` : ""}`,
     "",
     "Change",
     `  Files associated with session: ${fmt(data.git.filesChanged.value)}`,
@@ -438,6 +489,7 @@ export function asCsv(objects: unknown[]): string {
       durationMs: object.process.durationMs.value,
       totalTokens: object.usage.totalTokens.value,
       estimatedCostUsd: object.usage.estimatedCostUsd.value,
+      costMeasurement: object.usage.costMeasurement,
       validationPassed: object.validation.filter(
         (item) => item.status === "passed",
       ).length,

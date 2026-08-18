@@ -22,4 +22,26 @@ describe("configuration", () => {
     expect(defineConfig({}).privacy.storeTerminalOutput).toBe(false);
     expect(defineConfig({}).analysis.enabled).toBe(false);
   });
+  it("rejects ambiguous duplicate model pricing", () => {
+    expect(() =>
+      defineConfig({
+        pricing: {
+          custom: [
+            {
+              provider: "openai",
+              model: "model-a",
+              inputPerMillionUsd: 1,
+              outputPerMillionUsd: 2,
+            },
+            {
+              provider: "openai",
+              model: "model-a",
+              inputPerMillionUsd: 3,
+              outputPerMillionUsd: 4,
+            },
+          ],
+        },
+      }),
+    ).toThrow(/Duplicate pricing/);
+  });
 });
