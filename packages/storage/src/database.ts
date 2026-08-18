@@ -4,7 +4,7 @@ import Database from "better-sqlite3";
 import { and, desc, eq, lt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { SessionRecord, TokenFaxxEvent } from "@tokenfaxx/core";
-import { parseEvent } from "@tokenfaxx/core";
+import { parseEvent, TokenFaxxError } from "@tokenfaxx/core";
 import { createId, nowIso } from "@tokenfaxx/shared";
 import * as schema from "./schema.js";
 
@@ -27,6 +27,21 @@ CREATE TABLE IF NOT EXISTS analysis_snapshots (id TEXT PRIMARY KEY, session_id T
 CREATE INDEX IF NOT EXISTS analysis_session_idx ON analysis_snapshots(session_id, created_at);
 INSERT OR IGNORE INTO _migrations(version, applied_at) VALUES (1, datetime('now'));
 `;
+
+function stableJson(value: unknown): string {
+  const canonicalize = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(canonicalize);
+    if (item && typeof item === "object")
+      return Object.fromEntries(
+        Object.entries(item)
+          .filter(([, child]) => child !== undefined)
+          .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+          .map(([key, child]) => [key, canonicalize(child)]),
+      );
+    return item;
+  };
+  return JSON.stringify(canonicalize(value));
+}
 
 export interface CreateSessionInput {
   repository: string;
@@ -158,109 +173,165 @@ export class TokenFaxxDatabase {
   }
   appendEvent(input: unknown): TokenFaxxEvent {
     const event = parseEvent(input);
-    this.db
-      .insert(schema.events)
-      .values({
-        id: event.id,
-        sessionId: event.sessionId,
-        schemaVersion: event.schemaVersion,
-        eventType: event.eventType,
-        timestamp: event.timestamp,
-        payload: JSON.stringify(event.payload),
-        metadata: JSON.stringify(event.metadata),
-      })
-      .run();
-    const p = event.payload;
-    if (event.eventType === "model.usage") {
-      const inputTokens = p.inputTokens as number | null;
-      const outputTokens = p.outputTokens as number | null;
-      const cached = (p.cachedInputTokens as number | null | undefined) ?? null;
-      this.db
-        .insert(schema.modelUsage)
-        .values({
-          id: createId(),
-          sessionId: event.sessionId,
-          provider: String(p.provider),
-          model: p.model as string | null,
-          inputTokens,
-          outputTokens,
-          cachedTokens: cached,
-          reasoningTokens:
-            (p.reasoningTokens as number | null | undefined) ?? null,
-          totalTokens:
-            (p.totalTokens as number | null | undefined) ??
-            (inputTokens === null || outputTokens === null
-              ? null
-              : inputTokens + outputTokens),
-          estimatedCostUsd:
-            (p.estimatedCostUsd as number | null | undefined) ?? null,
-          costMeasurement: (p.costMeasurement as string | undefined) ?? null,
-          costSource: (p.costSource as string | undefined) ?? null,
-          pricingEffectiveDate:
-            (p.pricingEffectiveDate as string | undefined) ?? null,
-          measurementType: String(p.measurement),
-          source: (p.source as string | undefined) ?? null,
-          timestamp: event.timestamp,
-        })
-        .run();
-    }
-    if (event.eventType === "tool.completed")
-      this.db
-        .insert(schema.toolCalls)
-        .values({
-          id: createId(),
-          sessionId: event.sessionId,
-          tool: String(p.tool),
-          actionType: String(p.actionType),
-          success: Boolean(p.success),
-          durationMs: Number(p.durationMs),
-          timestamp: event.timestamp,
-        })
-        .run();
-    if (event.eventType === "command.completed")
-      this.db
-        .insert(schema.commandRuns)
-        .values({
-          id: createId(),
-          sessionId: event.sessionId,
-          commandCategory: String(p.category),
-          exitCode: p.exitCode as number | null,
-          durationMs: Number(p.durationMs),
-          status: String(p.status),
-          retryNumber: Number(p.retryNumber),
-          timestamp: event.timestamp,
-        })
-        .run();
-    if (event.eventType === "task.outcome")
-      this.db
-        .insert(schema.taskOutcomes)
-        .values({
-          id: createId(),
-          sessionId: event.sessionId,
-          status: String(p.status),
-          accepted: (p.accepted as boolean | null | undefined) ?? null,
-          reason: (p.reason as string | undefined) ?? null,
-          evidence: JSON.stringify(p.evidence),
-          timestamp: event.timestamp,
-        })
-        .run();
-    if (event.eventType === "analysis.completed")
-      this.db
-        .insert(schema.analysisSnapshots)
-        .values({
-          id: createId(),
-          sessionId: event.sessionId,
-          provider: String(p.provider),
-          model: String(p.model),
-          generationId: (p.generationId as string | null) ?? null,
-          evidenceHash: String(p.evidenceHash),
-          schemaVersion: Number(p.schemaVersion),
-          analysisJson: JSON.stringify(p.analysis),
-          usageJson: JSON.stringify(p.usage),
-          createdAt: event.timestamp,
-        })
-        .run();
-    return event;
+    const payload = stableJson(event.payload);
+    const metadata = stableJson(event.metadata);
+    const append = this.sqlite.transaction(() => {
+      const context = this.sqlite
+        .prepare(
+          "SELECT s.agent, s.task_id AS taskId, p.repository_path AS repository FROM sessions s JOIN projects p ON p.id = s.project_id WHERE s.id = ?",
+        )
+        .get(event.sessionId) as
+        | { agent: string; taskId: string | null; repository: string }
+        | undefined;
+      if (!context)
+        throw new TokenFaxxError(
+          `Session ${event.sessionId} was not found`,
+          "SESSION_NOT_FOUND",
+        );
+      if (
+        context.agent !== event.agent ||
+        context.repository !== event.repository ||
+        context.taskId !== (event.taskId ?? null)
+      )
+        throw new TokenFaxxError(
+          "Event envelope does not match its owning session",
+          "EVENT_SESSION_MISMATCH",
+        );
+
+      const inserted = this.sqlite
+        .prepare(
+          "INSERT OR IGNORE INTO events(id,session_id,schema_version,event_type,timestamp,payload,metadata) VALUES(?,?,?,?,?,?,?)",
+        )
+        .run(
+          event.id,
+          event.sessionId,
+          event.schemaVersion,
+          event.eventType,
+          event.timestamp,
+          payload,
+          metadata,
+        );
+      if (inserted.changes === 0) {
+        const existing = this.sqlite
+          .prepare(
+            "SELECT session_id AS sessionId, schema_version AS schemaVersion, event_type AS eventType, timestamp, payload, metadata FROM events WHERE id = ?",
+          )
+          .get(event.id) as {
+          sessionId: string;
+          schemaVersion: number;
+          eventType: string;
+          timestamp: string;
+          payload: string;
+          metadata: string;
+        };
+        const identical =
+          existing.sessionId === event.sessionId &&
+          existing.schemaVersion === event.schemaVersion &&
+          existing.eventType === event.eventType &&
+          existing.timestamp === event.timestamp &&
+          stableJson(JSON.parse(existing.payload)) === payload &&
+          stableJson(JSON.parse(existing.metadata)) === metadata;
+        if (identical) return event;
+        throw new TokenFaxxError(
+          `Event ID ${event.id} already exists with different content`,
+          "EVENT_ID_CONFLICT",
+        );
+      }
+
+      const p = event.payload;
+      if (event.eventType === "model.usage") {
+        const inputTokens = p.inputTokens as number | null;
+        const outputTokens = p.outputTokens as number | null;
+        const cached =
+          (p.cachedInputTokens as number | null | undefined) ?? null;
+        this.db
+          .insert(schema.modelUsage)
+          .values({
+            id: createId(),
+            sessionId: event.sessionId,
+            provider: String(p.provider),
+            model: p.model as string | null,
+            inputTokens,
+            outputTokens,
+            cachedTokens: cached,
+            reasoningTokens:
+              (p.reasoningTokens as number | null | undefined) ?? null,
+            totalTokens:
+              (p.totalTokens as number | null | undefined) ??
+              (inputTokens === null || outputTokens === null
+                ? null
+                : inputTokens + outputTokens),
+            estimatedCostUsd:
+              (p.estimatedCostUsd as number | null | undefined) ?? null,
+            costMeasurement: (p.costMeasurement as string | undefined) ?? null,
+            costSource: (p.costSource as string | undefined) ?? null,
+            pricingEffectiveDate:
+              (p.pricingEffectiveDate as string | undefined) ?? null,
+            measurementType: String(p.measurement),
+            source: (p.source as string | undefined) ?? null,
+            timestamp: event.timestamp,
+          })
+          .run();
+      }
+      if (event.eventType === "tool.completed")
+        this.db
+          .insert(schema.toolCalls)
+          .values({
+            id: createId(),
+            sessionId: event.sessionId,
+            tool: String(p.tool),
+            actionType: String(p.actionType),
+            success: Boolean(p.success),
+            durationMs: Number(p.durationMs),
+            timestamp: event.timestamp,
+          })
+          .run();
+      if (event.eventType === "command.completed")
+        this.db
+          .insert(schema.commandRuns)
+          .values({
+            id: createId(),
+            sessionId: event.sessionId,
+            commandCategory: String(p.category),
+            exitCode: p.exitCode as number | null,
+            durationMs: Number(p.durationMs),
+            status: String(p.status),
+            retryNumber: Number(p.retryNumber),
+            timestamp: event.timestamp,
+          })
+          .run();
+      if (event.eventType === "task.outcome")
+        this.db
+          .insert(schema.taskOutcomes)
+          .values({
+            id: createId(),
+            sessionId: event.sessionId,
+            status: String(p.status),
+            accepted: (p.accepted as boolean | null | undefined) ?? null,
+            reason: (p.reason as string | undefined) ?? null,
+            evidence: JSON.stringify(p.evidence),
+            timestamp: event.timestamp,
+          })
+          .run();
+      if (event.eventType === "analysis.completed")
+        this.db
+          .insert(schema.analysisSnapshots)
+          .values({
+            id: createId(),
+            sessionId: event.sessionId,
+            provider: String(p.provider),
+            model: String(p.model),
+            generationId: (p.generationId as string | null) ?? null,
+            evidenceHash: String(p.evidenceHash),
+            schemaVersion: Number(p.schemaVersion),
+            analysisJson: JSON.stringify(p.analysis),
+            usageJson: JSON.stringify(p.usage),
+            createdAt: event.timestamp,
+          })
+          .run();
+      return event;
+    });
+    return append();
   }
   addGitSnapshot(
     sessionId: string,
