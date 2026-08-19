@@ -20,15 +20,21 @@ import {
   type ValidationType,
 } from "@tokenfaxx/collectors";
 import {
+  BENCHMARK_DEFINITION_HASH_VERSION,
   benchmarkDefinitionSchema,
+  evaluateBenchmarkExpectations,
   EVENT_SCHEMA_VERSION,
+  hashBenchmarkDefinition,
   taskProfileSchema,
+  type BenchmarkDefinition,
+  type BenchmarkVerdict,
   type TaskOutcomeStatus,
   type TokenFaxxConfig,
 } from "@tokenfaxx/core";
 import { evaluate } from "@tokenfaxx/scoring";
 import { createId, nowIso } from "@tokenfaxx/shared";
 import { TokenFaxxDatabase, type SessionBundle } from "@tokenfaxx/storage";
+import { assessBenchmarkComparison, benchmarkExitCode } from "./benchmark.js";
 import { databasePath, loadConfig } from "./config.js";
 import { asCsv, renderReport, reportObject } from "./report.js";
 
@@ -74,6 +80,11 @@ interface RunOptions {
   taskType?: string;
   complexity?: string;
   benchmarkId?: string;
+  benchmark?: {
+    definition: BenchmarkDefinition;
+    definitionHash: string;
+    resolvedStartingCommit: string;
+  };
   maximumCostUsd?: number;
   aiProfile?: boolean;
 }
@@ -259,9 +270,11 @@ function recalculateScore(
   );
   db.saveScore(bundle.session.id, evaluation);
 }
-async function runTracked(
-  options: RunOptions,
-): Promise<{ id: string; exitCode: number }> {
+async function runTracked(options: RunOptions): Promise<{
+  id: string;
+  exitCode: number;
+  benchmarkVerdict: BenchmarkVerdict | null;
+}> {
   const repository = options.repository ?? root();
   const storageRoot = options.storageRoot ?? repository;
   const config = options.config ?? (await loadConfig(repository));
@@ -302,8 +315,14 @@ async function runTracked(
     branch: before.branch,
     headSha: before.headSha,
   });
+  const benchmarkId = options.benchmark?.definition.id ?? options.benchmarkId;
   let taskProfile = taskProfileSchema.parse({
-    benchmarkId: options.benchmarkId,
+    benchmarkId,
+    benchmarkDefinitionHashVersion: options.benchmark
+      ? BENCHMARK_DEFINITION_HASH_VERSION
+      : undefined,
+    benchmarkDefinitionHash: options.benchmark?.definitionHash,
+    benchmarkStartingCommit: options.benchmark?.resolvedStartingCommit,
     taskType: options.taskType ?? "other",
     validationCount: Object.values(config.validation).filter(
       (item) => item?.enabled,
@@ -311,10 +330,10 @@ async function runTracked(
     complexity: options.complexity ?? "unknown",
     complexitySource: options.complexity
       ? "user"
-      : options.benchmarkId
+      : benchmarkId
         ? "benchmark"
         : "unknown",
-    tags: [],
+    tags: options.benchmark?.definition.tags ?? [],
     maximumCostUsd: options.maximumCostUsd,
   });
   if (options.aiProfile) {
@@ -550,6 +569,22 @@ async function runTracked(
       config,
     );
     db.saveScore(session.id, evaluation);
+    const benchmarkVerdict = options.benchmark
+      ? evaluateBenchmarkExpectations(
+          options.benchmark.definition,
+          options.benchmark.definitionHash,
+          options.benchmark.resolvedStartingCommit,
+          validations,
+        )
+      : null;
+    if (benchmarkVerdict)
+      event(
+        db,
+        session,
+        repository,
+        "benchmark.evaluated",
+        benchmarkVerdict as unknown as Record<string, unknown>,
+      );
     let bundle = db.getBundle(session.id);
     if (bundle && config.analysis.enabled) {
       try {
@@ -563,7 +598,11 @@ async function runTracked(
     }
     if (bundle) process.stdout.write(`${renderReport(bundle)}\n`);
     db.close();
-    return { id: session.id, exitCode: interrupted ? 130 : (childExit ?? 1) };
+    return {
+      id: session.id,
+      exitCode: interrupted ? 130 : (childExit ?? 1),
+      benchmarkVerdict,
+    };
   } catch (error) {
     logger.error(
       { err: error, sessionId: session.id },
@@ -809,10 +848,6 @@ program
       bundle.events.find((item) => item.eventType === "task.profiled")?.payload;
     const leftProfile = profile(left);
     const rightProfile = profile(right);
-    const sameBenchmark = Boolean(
-      leftProfile?.benchmarkId &&
-      leftProfile.benchmarkId === rightProfile?.benchmarkId,
-    );
     const sameTask = Boolean(
       left.session.taskId && left.session.taskId === right.session.taskId,
     );
@@ -823,14 +858,13 @@ program
       (item) => item.snapshotType === "before",
     )?.headSha;
     const sameStart = Boolean(leftHead && leftHead === rightHead);
-    const comparisonConfidence =
-      sameBenchmark && sameStart
-        ? 100
-        : sameTask && sameStart
-          ? 85
-          : sameTask
-            ? 65
-            : 20;
+    const comparison = assessBenchmarkComparison(
+      leftProfile,
+      rightProfile,
+      sameTask,
+      sameStart,
+    );
+    const { comparisonConfidence } = comparison;
     if (comparisonConfidence < 65)
       process.stdout.write(
         "Warning: These sessions are not directly comparable; no winner will be declared.\n",
@@ -867,7 +901,7 @@ program
             : right.session.id
         : null;
     process.stdout.write(
-      `${JSON.stringify({ comparisonConfidence, comparable: comparisonConfidence >= 65, basis: { sameBenchmark, sameTask, sameStartingCommit: sameStart }, winner, left: leftValue, right: rightValue }, null, 2)}\n`,
+      `${JSON.stringify({ comparisonConfidence, comparable: comparisonConfidence >= 65, basis: comparison.basis, winner, left: leftValue, right: rightValue }, null, 2)}\n`,
     );
     db.close();
   });
@@ -1003,6 +1037,13 @@ benchmark
       const worktree = fs.mkdtempSync(
         path.join(os.tmpdir(), `tokenfaxx-${definition.id}-`),
       );
+      const resolvedStartingCommit = (
+        await git.revparse([definition.startingCommit])
+      ).trim();
+      const definitionHash = hashBenchmarkDefinition(
+        definition,
+        resolvedStartingCommit,
+      );
       let succeeded = false;
       try {
         await git.raw([
@@ -1015,22 +1056,17 @@ benchmark
         const base = await loadConfig(repository);
         const config: TokenFaxxConfig = {
           ...base,
-          validation: {
-            ...base.validation,
-            ...Object.fromEntries(
-              Object.entries(definition.validation ?? {}).map(
-                ([type, command]) => [
-                  type,
-                  {
-                    command,
-                    timeoutMs: definition.timeoutMs ?? 120_000,
-                    enabled: true,
-                    parser: "auto" as const,
-                  },
-                ],
-              ),
-            ),
-          },
+          validation: Object.fromEntries(
+            Object.entries(definition.validation).map(([type, command]) => [
+              type,
+              {
+                command,
+                timeoutMs: definition.timeoutMs,
+                enabled: true,
+                parser: "auto" as const,
+              },
+            ]),
+          ),
         };
         const result = await runTracked({
           agent: options.agent,
@@ -1040,13 +1076,23 @@ benchmark
           repository: worktree,
           storageRoot: primary,
           config,
-          benchmarkId: definition.id,
+          benchmark: { definition, definitionHash, resolvedStartingCommit },
           ...(definition.maximumCostUsd !== undefined
             ? { maximumCostUsd: definition.maximumCostUsd }
             : {}),
         });
-        succeeded = result.exitCode === 0;
-        process.exitCode = result.exitCode;
+        if (!result.benchmarkVerdict)
+          throw new Error("Benchmark completed without producing a verdict");
+        const exitCode = benchmarkExitCode(
+          result.exitCode,
+          result.benchmarkVerdict,
+        );
+        succeeded = exitCode === 0;
+        process.exitCode = exitCode;
+        if (exitCode !== result.exitCode && exitCode !== 0)
+          process.stderr.write(
+            `Benchmark expectations were not met; exiting with ${exitCode}.\n`,
+          );
       } finally {
         if (succeeded) {
           await git.raw(["worktree", "remove", "--force", worktree]);

@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  BENCHMARK_DEFINITION_HASH_VERSION,
+  benchmarkVerdictSchema,
+} from "./benchmark.js";
 
 export const EVENT_SCHEMA_VERSION = 1 as const;
 export const eventTypes = [
@@ -16,6 +20,7 @@ export const eventTypes = [
   "git.commit.created",
   "git.sampled",
   "task.profiled",
+  "benchmark.evaluated",
   "analysis.completed",
   "validation.completed",
   "task.outcome",
@@ -107,6 +112,14 @@ const payloadSchemas = {
   }),
   "task.profiled": z.object({
     benchmarkId: z.string().optional(),
+    benchmarkDefinitionHashVersion: z
+      .literal(BENCHMARK_DEFINITION_HASH_VERSION)
+      .optional(),
+    benchmarkDefinitionHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+    benchmarkStartingCommit: z.string().min(1).optional(),
     taskType: z.string(),
     expectedFiles: nonnegativeInt.optional(),
     validationCount: nonnegativeInt,
@@ -129,6 +142,7 @@ const payloadSchemas = {
       })
       .optional(),
   }),
+  "benchmark.evaluated": benchmarkVerdictSchema,
   "analysis.completed": z.object({
     provider: z.literal("openrouter"),
     model: z.string(),

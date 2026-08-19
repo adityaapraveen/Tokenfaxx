@@ -23,7 +23,7 @@ AI should not replace deterministic evidence. Its appropriate roles here are tas
 | CLI adapters        | Codex, Claude, shell | Alpha      | No documented exact usage/tool-event capture                       |
 | SDK                 | Yes                  | Alpha      | No automatic validation/Git/scoring completion path                |
 | Reports/exports     | Yes                  | Alpha      | No trends/dashboard; CSV is intentionally narrow                   |
-| Benchmarks          | Yes                  | Alpha      | `expectedOutcome` is parsed but not evaluated                      |
+| Benchmarks          | Yes                  | Alpha/Beta | Expectations are enforced; cohort calibration is still required    |
 | AI narrative        | Yes, OpenRouter      | Alpha      | Needs evaluation datasets and hard provider-side budgets           |
 | AI task profiling   | Added                | Alpha      | Description-only inference; calibration still required             |
 | Privacy controls    | Strong defaults      | Alpha/Beta | Needs threat model, fuzzing, and secret-leak regression suite      |
@@ -90,11 +90,11 @@ Where: `packages/core/src/integrations.ts` defines `OutcomeEnricher`, but nothin
 
 Build GitHub first: associate branch/commit/PR, CI conclusion, review approval, merge, revision count, revert, and time-to-merge. Require explicit repository consent and least-privilege read scopes. Store source URLs/IDs and observation timestamps. Do not infer that merge equals correctness.
 
-### 5. Benchmark expectations are unused
+### 5. Benchmark expectations and reproducibility
 
-Where: `packages/core/src/benchmark.ts` accepts `expectedOutcome`; `apps/cli/src/index.ts` never compares results against it.
+Status: implemented on 2026-08-19.
 
-This makes benchmarks less accurate than their definition suggests. Evaluate each expected validation, emit a benchmark verdict, return a distinct failure code for unmet expectations, and store the definition hash for reproducibility.
+Benchmark definitions now require at least one known expectation, enforce a one-to-one validation/expectation contract, and reject misspelled keys. Each run resolves the configured starting revision, hashes it with the normalized definition and hash-format version, evaluates declared checks against stored validation evidence, persists a `benchmark.evaluated` event, and returns exit code 2 for unmet or missing expectations. Local configuration cannot inject un-hashed benchmark validation commands. Reports expose the definition hash, resolved commit, and check-level verdicts, and comparisons refuse high confidence when benchmark hashes differ. The remaining benchmark work is empirical cohort calibration and broader repository/language fixtures.
 
 ### 6. SDK sessions do not produce the full evaluation slice
 
@@ -136,7 +136,7 @@ The OpenRouter implementation uses temperature zero, strict structured output, b
 
 This audit added two accuracy/privacy improvements:
 
-1. AI anomaly citations are rejected if they do not reference a real ID in the transmitted bundle.
+1. AI anomaly citations are rejected if they do not reference a real transmitted event ID; unrelated session or row IDs cannot satisfy a citation.
 2. Free-form commands, errors, reasons, evidence text, sources, rationales, and validation limitations are excluded from outbound report analysis. Validation details are now an explicit numeric/status allowlist.
 
 ### New AI task profiling
@@ -294,7 +294,7 @@ These are release blockers for a public product, not cosmetic tasks.
 ### P0: trustworthy developer preview
 
 1. Wire documented exact usage channels for Codex/Claude CLI adapters; configured SDK pricing is complete.
-2. Evaluate benchmark `expectedOutcome` and definition hashes.
+2. Calibrate benchmark cohorts; deterministic expectation verdicts and definition hashes are complete.
 3. Replace the embedded migration bootstrap; transactional/idempotent event projection is complete.
 4. Add stale-session recovery and idempotent completion.
 5. Constrain result files and complete privacy/security regression tests.
@@ -336,10 +336,10 @@ Exit gate: tenant isolation, deletion, auditability, SLOs, incident response, an
 
 For the next engineering sessions, do this in order:
 
-1. Make benchmark expectations produce a stored verdict and failing exit code.
-2. Add stale-session recovery to `doctor` with an explicit `--repair` action.
-3. Create CI and clean-install smoke tests.
-4. Replace the embedded migration bootstrap with ordered migration files.
+1. Add stale-session recovery to `doctor` with an explicit `--repair` action.
+2. Create CI and clean-install smoke tests.
+3. Replace the embedded migration bootstrap with ordered migration files.
+4. Constrain validation result files to the repository boundary.
 5. Only then start GitHub enrichment.
 
 This sequence improves evidence correctness and operational safety before adding more surface area.

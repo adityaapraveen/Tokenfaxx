@@ -1,5 +1,7 @@
 import {
+  benchmarkVerdictSchema,
   evidence,
+  type BenchmarkVerdict,
   type EvidenceMeasurement,
   type EvidenceValue,
 } from "@tokenfaxx/core";
@@ -58,6 +60,7 @@ interface ReportData {
     evidence: string[];
     profile: Record<string, unknown> | null;
   };
+  benchmark: BenchmarkVerdict | null;
   validation: ValidationReport[];
   usage: {
     inputTokens: EvidenceValue<number>;
@@ -228,6 +231,9 @@ export function reportObject(bundle: SessionBundle): ReportData {
     (details.confidences as { outcome?: number } | undefined)?.outcome ??
     (bundle.outcome?.accepted == null ? 55 : 100);
   const latestAnalysis = bundle.analyses[0];
+  const benchmarkEvent = [...bundle.events]
+    .reverse()
+    .find((item) => item.eventType === "benchmark.evaluated");
   return {
     session: {
       id: bundle.session.id,
@@ -274,6 +280,9 @@ export function reportObject(bundle: SessionBundle): ReportData {
       evidence: bundle.outcome ? JSON.parse(bundle.outcome.evidence) : [],
       profile,
     },
+    benchmark: benchmarkEvent
+      ? benchmarkVerdictSchema.parse(benchmarkEvent.payload)
+      : null,
     validation: bundle.validations.map((item) => ({
       id: item.id,
       type: item.validationType,
@@ -382,6 +391,7 @@ export function renderReport(bundle: SessionBundle): string {
   const passed = validations.filter((item) => item.status === "passed").length;
   const taskOutcome = data.task.outcome as EvidenceValue<string>;
   const usage = data.usage;
+  const benchmark = data.benchmark;
   const lines = [
     `TokenFaxx Session ${data.session.id}`,
     "",
@@ -390,6 +400,19 @@ export function renderReport(bundle: SessionBundle): string {
     `  Task: ${taskOutcome.value ?? "Unknown"}`,
     `  Acceptance: ${data.task.accepted === null ? unavailable : data.task.accepted ? "Accepted" : "Rejected"}`,
     `  Outcome confidence: ${score?.confidences?.outcome ?? taskOutcome.confidence}%`,
+    ...(benchmark
+      ? [
+          "",
+          "Benchmark",
+          `  Verdict: ${benchmark.passed ? "PASS" : "FAIL"}`,
+          `  Definition: sha256-v${benchmark.definitionHashVersion}:${benchmark.definitionHash}`,
+          `  Starting commit: ${benchmark.resolvedStartingCommit}`,
+          ...benchmark.checks.map(
+            (check) =>
+              `  ${check.validationType}: expected ${check.expected ? "pass" : "fail"}, observed ${check.actual === null ? "missing" : check.actual ? "pass" : "fail"} — ${check.status}`,
+          ),
+        ]
+      : []),
     "",
     "Validation",
     ...(validations.length
@@ -486,6 +509,7 @@ export function asCsv(objects: unknown[]): string {
       processStatus: object.process.status.value,
       taskOutcome: object.task.outcome.value,
       accepted: object.task.accepted,
+      benchmarkPassed: object.benchmark?.passed ?? null,
       durationMs: object.process.durationMs.value,
       totalTokens: object.usage.totalTokens.value,
       estimatedCostUsd: object.usage.estimatedCostUsd.value,
