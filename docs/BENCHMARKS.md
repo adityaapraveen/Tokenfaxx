@@ -13,7 +13,7 @@ They do not ask an LLM whether the implementation “looks correct.” Agent exe
   "repository": ".",
   "startingCommit": "HEAD",
   "timeoutMs": 900000,
-  "setup": "pnpm install --frozen-lockfile --offline",
+  "setup": "pnpm install --frozen-lockfile",
   "validation": {
     "test": "pnpm test",
     "typecheck": "pnpm typecheck"
@@ -106,4 +106,4 @@ tokenfaxx benchmark run --task examples/benchmark.json --agent codex
 tokenfaxx report --format terminal
 ```
 
-Before using the example against a real repository, replace its task, starting commit, setup command, and validation commands with inputs you have reviewed. Setup, benchmark, and validation commands execute with your user permissions. The example uses pnpm's offline mode because the development install has already populated the local package store; choose a setup command appropriate for the target repository.
+Before using the example against a real repository, replace its task, starting commit, setup command, and validation commands with inputs you have reviewed. Setup, benchmark, and validation commands execute with your user permissions and may access the network. The example uses a frozen pnpm lockfile; choose an appropriately reproducible setup command for the target repository.

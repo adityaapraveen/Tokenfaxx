@@ -4,7 +4,7 @@
   "repository": ".",
   "startingCommit": "HEAD",
   "timeoutMs": 900000,
-  "setup": "pnpm install --frozen-lockfile --offline",
+  "setup": "pnpm install --frozen-lockfile",
   "validation": { "test": "pnpm test", "typecheck": "pnpm typecheck" },
   "expectedOutcome": { "testsPass": true, "typecheckPasses": true },
   "maximumCostUsd": 5,
