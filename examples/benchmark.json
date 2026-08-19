@@ -4,7 +4,8 @@
   "repository": ".",
   "startingCommit": "HEAD",
   "timeoutMs": 900000,
-  "validation": { "test": "npm test", "typecheck": "npm run typecheck" },
+  "setup": "pnpm install --frozen-lockfile",
+  "validation": { "test": "pnpm test", "typecheck": "pnpm typecheck" },
   "expectedOutcome": { "testsPass": true, "typecheckPasses": true },
   "maximumCostUsd": 5,
   "tags": ["migration"]

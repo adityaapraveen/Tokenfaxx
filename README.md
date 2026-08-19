@@ -330,7 +330,7 @@ tokenfaxx benchmark run --task examples/benchmark.json --agent codex
 tokenfaxx benchmark compare --benchmark fix-notification-migration
 ```
 
-Each benchmark must declare at least one `expectedOutcome`, and every validation command must have exactly one matching expectation. TokenFaxx compares every expectation with the validation evidence, stores a `benchmark.evaluated` event, and prints the versioned definition SHA-256 plus the resolved starting commit. Benchmark validation commands come only from the hashed definition, so local configuration cannot silently change the gate. An expected check that produced no evidence is reported as `missing`, never guessed.
+Each benchmark must declare at least one `expectedOutcome`, and every validation command must have exactly one matching expectation. An optional hashed `setup` command can install dependencies inside the detached worktree before the agent runs. TokenFaxx compares every expectation with the validation evidence, stores a `benchmark.evaluated` event, and prints setup provenance, the versioned definition SHA-256, and the resolved starting commit. Benchmark validation commands come only from the hashed definition, so local configuration cannot silently change the gate. An expected check that produced no evidence is reported as `missing`, never guessed.
 
 Exit codes are automation-safe:
 

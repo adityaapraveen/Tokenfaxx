@@ -27,6 +27,7 @@ import {
   hashBenchmarkDefinition,
   taskProfileSchema,
   type BenchmarkDefinition,
+  type BenchmarkSetupObservation,
   type BenchmarkVerdict,
   type TaskOutcomeStatus,
   type TokenFaxxConfig,
@@ -34,7 +35,11 @@ import {
 import { evaluate } from "@tokenfaxx/scoring";
 import { createId, nowIso } from "@tokenfaxx/shared";
 import { TokenFaxxDatabase, type SessionBundle } from "@tokenfaxx/storage";
-import { assessBenchmarkComparison, benchmarkExitCode } from "./benchmark.js";
+import {
+  assessBenchmarkComparison,
+  benchmarkExitCode,
+  runBenchmarkSetup,
+} from "./benchmark.js";
 import { databasePath, loadConfig } from "./config.js";
 import { asCsv, renderReport, reportObject } from "./report.js";
 
@@ -84,6 +89,7 @@ interface RunOptions {
     definition: BenchmarkDefinition;
     definitionHash: string;
     resolvedStartingCommit: string;
+    setup: BenchmarkSetupObservation;
   };
   maximumCostUsd?: number;
   aiProfile?: boolean;
@@ -575,6 +581,7 @@ async function runTracked(options: RunOptions): Promise<{
           options.benchmark.definitionHash,
           options.benchmark.resolvedStartingCommit,
           validations,
+          options.benchmark.setup,
         )
       : null;
     if (benchmarkVerdict)
@@ -1053,6 +1060,11 @@ benchmark
           worktree,
           definition.startingCommit,
         ]);
+        const setup = runBenchmarkSetup(
+          definition.setup,
+          worktree,
+          definition.timeoutMs,
+        );
         const base = await loadConfig(repository);
         const config: TokenFaxxConfig = {
           ...base,
@@ -1076,7 +1088,12 @@ benchmark
           repository: worktree,
           storageRoot: primary,
           config,
-          benchmark: { definition, definitionHash, resolvedStartingCommit },
+          benchmark: {
+            definition,
+            definitionHash,
+            resolvedStartingCommit,
+            setup,
+          },
           ...(definition.maximumCostUsd !== undefined
             ? { maximumCostUsd: definition.maximumCostUsd }
             : {}),

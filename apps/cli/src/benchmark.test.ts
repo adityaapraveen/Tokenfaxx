@@ -4,6 +4,7 @@ import {
   BENCHMARK_EXPECTATION_FAILED_EXIT_CODE,
   assessBenchmarkComparison,
   benchmarkExitCode,
+  runBenchmarkSetup,
 } from "./benchmark.js";
 
 const verdict = (passed: boolean): BenchmarkVerdict => ({
@@ -11,6 +12,7 @@ const verdict = (passed: boolean): BenchmarkVerdict => ({
   definitionHashVersion: 1,
   definitionHash: "a".repeat(64),
   resolvedStartingCommit: "abc123",
+  setup: { status: "not-configured", durationMs: 0 },
   passed,
   checks: [
     {
@@ -35,6 +37,23 @@ describe("benchmark command result", () => {
   it("preserves interruption and agent failures when expectations pass", () => {
     expect(benchmarkExitCode(130, verdict(false))).toBe(130);
     expect(benchmarkExitCode(7, verdict(true))).toBe(7);
+  });
+
+  it("runs an explicit setup command and rejects setup failures", () => {
+    expect(
+      runBenchmarkSetup(
+        `"${process.execPath}" -e "process.exit(0)"`,
+        process.cwd(),
+        5_000,
+      ),
+    ).toEqual({ status: "passed", durationMs: expect.any(Number) });
+    expect(() =>
+      runBenchmarkSetup(
+        `"${process.execPath}" -e "process.exit(3)"`,
+        process.cwd(),
+        5_000,
+      ),
+    ).toThrow(/exit code 3/);
   });
 
   it("refuses high-confidence comparison when benchmark definitions differ", () => {

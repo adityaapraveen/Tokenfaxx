@@ -94,7 +94,7 @@ Build GitHub first: associate branch/commit/PR, CI conclusion, review approval, 
 
 Status: implemented on 2026-08-19.
 
-Benchmark definitions now require at least one known expectation, enforce a one-to-one validation/expectation contract, and reject misspelled keys. Each run resolves the configured starting revision, hashes it with the normalized definition and hash-format version, evaluates declared checks against stored validation evidence, persists a `benchmark.evaluated` event, and returns exit code 2 for unmet or missing expectations. Local configuration cannot inject un-hashed benchmark validation commands. Reports expose the definition hash, resolved commit, and check-level verdicts, and comparisons refuse high confidence when benchmark hashes differ. The remaining benchmark work is empirical cohort calibration and broader repository/language fixtures.
+Benchmark definitions now require at least one known expectation, enforce a one-to-one validation/expectation contract, and reject misspelled keys. Each run resolves the configured starting revision, hashes it with the normalized definition and hash-format version, optionally runs a hashed worktree setup command, evaluates declared checks against stored validation evidence, persists a `benchmark.evaluated` event, and returns exit code 2 for unmet or missing expectations. Local configuration cannot inject un-hashed benchmark validation commands. Reports expose setup provenance, the definition hash, resolved commit, and check-level verdicts, and comparisons refuse high confidence when benchmark hashes differ. The remaining benchmark work is empirical cohort calibration and broader repository/language fixtures.
 
 ### 6. SDK sessions do not produce the full evaluation slice
 

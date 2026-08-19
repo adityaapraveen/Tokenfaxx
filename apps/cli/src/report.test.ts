@@ -58,6 +58,7 @@ describe("report exports", () => {
         definitionHashVersion: 1,
         definitionHash: "a".repeat(64),
         resolvedStartingCommit: "abc123",
+        setup: { status: "passed", durationMs: 120 },
         passed: false,
         checks: [
           {
