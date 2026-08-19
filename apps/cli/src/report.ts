@@ -407,6 +407,7 @@ export function renderReport(bundle: SessionBundle): string {
           `  Verdict: ${benchmark.passed ? "PASS" : "FAIL"}`,
           `  Definition: sha256-v${benchmark.definitionHashVersion}:${benchmark.definitionHash}`,
           `  Starting commit: ${benchmark.resolvedStartingCommit}`,
+          `  Setup: ${benchmark.setup.status}${benchmark.setup.status === "passed" ? ` (${duration(benchmark.setup.durationMs)})` : ""}`,
           ...benchmark.checks.map(
             (check) =>
               `  ${check.validationType}: expected ${check.expected ? "pass" : "fail"}, observed ${check.actual === null ? "missing" : check.actual ? "pass" : "fail"} — ${check.status}`,

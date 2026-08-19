@@ -13,6 +13,7 @@ They do not ask an LLM whether the implementation “looks correct.” Agent exe
   "repository": ".",
   "startingCommit": "HEAD",
   "timeoutMs": 900000,
+  "setup": "pnpm install --frozen-lockfile --offline",
   "validation": {
     "test": "pnpm test",
     "typecheck": "pnpm typecheck"
@@ -30,16 +31,19 @@ At least one of `testsPass`, `buildPasses`, `lintPasses`, or `typecheckPasses` i
 
 An expectation set to `false` means failure is the expected observation. A skipped, absent, or unrecognized validation remains `missing`; it does not satisfy either `true` or `false`.
 
+`setup` is optional and runs inside the detached worktree before the agent. Use it when ignored dependencies or generated artifacts are required. The command is part of the definition hash, and successful setup status/duration is stored in the verdict. A failed or timed-out setup stops the benchmark and preserves the worktree; it cannot produce a misleading agent verdict.
+
 ## Lifecycle and reproducibility
 
 1. TokenFaxx requires the primary repository to be clean.
 2. `startingCommit` is resolved to an immutable Git commit.
 3. The normalized definition, resolved commit, and hash-format version are hashed with SHA-256.
 4. A detached temporary worktree is created at that commit.
-5. The agent command and declared validation commands run inside the worktree.
-6. Each expectation is classified as `met`, `unmet`, or `missing` from stored validation evidence.
-7. The complete verdict is stored as a versioned `benchmark.evaluated` event.
-8. Successful worktrees are removed. Failed worktrees are preserved for debugging.
+5. The optional hashed setup command prepares the worktree.
+6. The agent command and declared validation commands run inside the worktree.
+7. Each expectation is classified as `met`, `unmet`, or `missing` from stored validation evidence.
+8. The complete verdict, including setup provenance, is stored as a versioned `benchmark.evaluated` event.
+9. Successful worktrees are removed. Failed worktrees are preserved for debugging.
 
 The definition hash changes when a meaningful definition field or the resolved starting commit changes. Formatting and JSON object-key ordering do not change it. The printed `sha256-v1` prefix makes the canonicalization contract explicit. Validation commands come only from this hashed benchmark definition; commands in `tokenfaxx.config.ts` are not inherited into benchmark runs.
 
@@ -102,4 +106,4 @@ tokenfaxx benchmark run --task examples/benchmark.json --agent codex
 tokenfaxx report --format terminal
 ```
 
-Before using the example against a real repository, replace its task, starting commit, and validation commands with inputs you have reviewed. Benchmark and validation commands execute with your user permissions.
+Before using the example against a real repository, replace its task, starting commit, setup command, and validation commands with inputs you have reviewed. Setup, benchmark, and validation commands execute with your user permissions. The example uses pnpm's offline mode because the development install has already populated the local package store; choose a setup command appropriate for the target repository.

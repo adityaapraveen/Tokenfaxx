@@ -41,6 +41,7 @@ export const benchmarkDefinitionSchema = z
     repository: z.string().min(1),
     startingCommit: z.string().min(1),
     timeoutMs: z.number().int().positive().max(86_400_000).default(900_000),
+    setup: z.string().min(1).optional(),
     validation: z
       .object({
         test: z.string().min(1).optional(),
@@ -99,6 +100,10 @@ export const benchmarkVerdictSchema = z.object({
   definitionHashVersion: z.literal(BENCHMARK_DEFINITION_HASH_VERSION),
   definitionHash: z.string().regex(/^[a-f0-9]{64}$/),
   resolvedStartingCommit: z.string().min(1),
+  setup: z.object({
+    status: z.enum(["passed", "not-configured"]),
+    durationMs: z.number().int().nonnegative(),
+  }),
   passed: z.boolean(),
   checks: z.array(benchmarkCheckSchema).min(1),
 });
@@ -107,6 +112,11 @@ export type BenchmarkVerdict = z.infer<typeof benchmarkVerdictSchema>;
 export interface BenchmarkValidationObservation {
   type: string;
   status: string;
+}
+
+export interface BenchmarkSetupObservation {
+  status: "passed" | "not-configured";
+  durationMs: number;
 }
 
 const expectations: {
@@ -154,6 +164,10 @@ export function evaluateBenchmarkExpectations(
   definitionHash: string,
   resolvedStartingCommit: string,
   validations: BenchmarkValidationObservation[],
+  setup: BenchmarkSetupObservation = {
+    status: "not-configured",
+    durationMs: 0,
+  },
 ): BenchmarkVerdict {
   const statuses = new Map(validations.map((item) => [item.type, item.status]));
   const checks = expectations.flatMap(
@@ -192,6 +206,7 @@ export function evaluateBenchmarkExpectations(
     definitionHashVersion: BENCHMARK_DEFINITION_HASH_VERSION,
     definitionHash,
     resolvedStartingCommit,
+    setup,
     passed: checks.every((check) => check.status === "met"),
     checks,
   });

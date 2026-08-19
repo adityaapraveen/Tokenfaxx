@@ -1,4 +1,8 @@
-import type { BenchmarkVerdict } from "@tokenfaxx/core";
+import { spawnSync } from "node:child_process";
+import type {
+  BenchmarkSetupObservation,
+  BenchmarkVerdict,
+} from "@tokenfaxx/core";
 
 export const BENCHMARK_EXPECTATION_FAILED_EXIT_CODE = 2;
 
@@ -10,6 +14,30 @@ export interface BenchmarkComparisonAssessment {
     sameTask: boolean;
     sameStartingCommit: boolean;
   };
+}
+
+export function runBenchmarkSetup(
+  command: string | undefined,
+  cwd: string,
+  timeoutMs: number,
+): BenchmarkSetupObservation {
+  if (!command) return { status: "not-configured", durationMs: 0 };
+  const startedAt = Date.now();
+  const result = spawnSync(command, {
+    cwd,
+    shell: true,
+    stdio: "inherit",
+    timeout: timeoutMs,
+    killSignal: "SIGTERM",
+  });
+  const durationMs = Date.now() - startedAt;
+  if (result.error)
+    throw new Error(`Benchmark setup could not run: ${result.error.message}`);
+  if (result.status !== 0)
+    throw new Error(
+      `Benchmark setup failed with ${result.signal ? `signal ${result.signal}` : `exit code ${result.status ?? "unknown"}`}`,
+    );
+  return { status: "passed", durationMs };
 }
 
 export function benchmarkExitCode(
