@@ -8,6 +8,8 @@ Model usage keeps token measurement provenance separate from cost provenance. Co
 
 Evidence-rich sessions also use `git.sampled`, `task.profiled`, and `analysis.completed`. Git samples contain filenames/status/size/timestamps only. Task profiles may include bounded AI inference provenance, confidence, limitations, and analysis-specific usage. Analysis events contain the sanitized evidence hash, structured narrative, model identity and analysis-specific usage.
 
+Benchmark sessions add `benchmark.evaluated` after validation completes. Its payload records the benchmark ID, hash-format version, normalized definition SHA-256, resolved starting commit, overall pass/fail verdict, and one `met`, `unmet`, or `missing` result per declared expectation. A missing validation is not equivalent to an observed failure.
+
 Schema changes that break interpretation require a new integer version and a migration/upcaster. Unknown or malformed payloads are rejected; they are never silently retained as opaque JSON.
 
 ## Delivery guarantees

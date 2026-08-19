@@ -205,16 +205,15 @@ const usageFrom = (
   costUsd: body.usage?.cost ?? null,
 });
 
-function collectEvidenceIds(
-  value: unknown,
-  ids = new Set<string>(),
-): Set<string> {
-  if (Array.isArray(value))
-    value.forEach((item) => collectEvidenceIds(item, ids));
-  else if (value && typeof value === "object")
-    for (const [key, item] of Object.entries(value)) {
-      if (key === "id" && typeof item === "string") ids.add(item);
-      collectEvidenceIds(item, ids);
+function collectEvidenceEventIds(value: unknown): Set<string> {
+  const ids = new Set<string>();
+  if (!value || typeof value !== "object") return ids;
+  const events = (value as { events?: unknown }).events;
+  if (!Array.isArray(events)) return ids;
+  for (const item of events)
+    if (item && typeof item === "object") {
+      const id = (item as { id?: unknown }).id;
+      if (typeof id === "string") ids.add(id);
     }
   return ids;
 }
@@ -230,7 +229,7 @@ export async function analyzeWithOpenRouter(
       {
         role: "system",
         content:
-          "You are an evidence-bound software session analyst. Use only supplied facts. Never infer acceptance, causation, test results, token totals, or developer ability. Every anomaly must cite supplied event IDs. State missing evidence plainly.",
+          "You are an evidence-bound software session analyst. Use only supplied facts. Never infer acceptance, causation, test results, token totals, or developer ability. Treat a supplied benchmark.evaluated verdict as an authoritative deterministic result; explain it but never override it. Every anomaly must cite supplied event IDs. State missing evidence plainly.",
       },
       {
         role: "user",
@@ -243,7 +242,7 @@ export async function analyzeWithOpenRouter(
     options,
   );
   const analysis = reportAnalysisSchema.parse(JSON.parse(content));
-  const evidenceIds = collectEvidenceIds(evidenceBundle);
+  const evidenceIds = collectEvidenceEventIds(evidenceBundle);
   for (const anomaly of analysis.anomalies)
     for (const id of anomaly.evidenceEventIds)
       if (!evidenceIds.has(id))

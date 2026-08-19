@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BENCHMARK_DEFINITION_HASH_VERSION } from "./benchmark.js";
 
 export const measurementSchema = z.enum([
   "observed",
@@ -48,6 +49,14 @@ export const taskOutcomeStatuses = [
 export type TaskOutcomeStatus = (typeof taskOutcomeStatuses)[number];
 export const taskProfileSchema = z.object({
   benchmarkId: z.string().optional(),
+  benchmarkDefinitionHashVersion: z
+    .literal(BENCHMARK_DEFINITION_HASH_VERSION)
+    .optional(),
+  benchmarkDefinitionHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
+  benchmarkStartingCommit: z.string().min(1).optional(),
   taskType: z
     .enum([
       "bugfix",

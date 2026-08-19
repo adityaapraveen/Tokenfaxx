@@ -13,7 +13,7 @@ TokenFaxx evaluates a session—not a developer. Token counts and lines changed 
 - Before/after Git snapshots plus a metadata-only file activity timeline.
 - Opt-in test, build, lint, and typecheck validation with bounded live output.
 - Deterministic, confidence-aware scoring that withholds a score when evidence is insufficient.
-- JSON, JSONL, CSV, terminal reports, session comparison, and reproducible benchmark worktrees.
+- JSON, JSONL, CSV, terminal reports, session comparison, and reproducible benchmark worktrees with enforced expectations.
 - Optional OpenRouter narrative analysis over sanitized metadata.
 - Optional AI task profiling with a confidence threshold and deterministic fallback.
 - Privacy-safe defaults: no telemetry and no stored prompts, responses, terminal output, source, diffs, environment values, or API keys.
@@ -330,7 +330,16 @@ tokenfaxx benchmark run --task examples/benchmark.json --agent codex
 tokenfaxx benchmark compare --benchmark fix-notification-migration
 ```
 
-Review benchmark validation commands: they execute with your permissions.
+Each benchmark must declare at least one `expectedOutcome`, and every validation command must have exactly one matching expectation. TokenFaxx compares every expectation with the validation evidence, stores a `benchmark.evaluated` event, and prints the versioned definition SHA-256 plus the resolved starting commit. Benchmark validation commands come only from the hashed definition, so local configuration cannot silently change the gate. An expected check that produced no evidence is reported as `missing`, never guessed.
+
+Exit codes are automation-safe:
+
+- `0`: the agent command and all benchmark expectations passed.
+- `2`: the agent command completed, but at least one expectation was unmet or missing.
+- `130`: the run was interrupted.
+- Another non-zero value: the tracked agent command failed while the declared expectations otherwise matched.
+
+Review benchmark validation and agent commands before running them because they execute with your user permissions. See [benchmark evaluation](docs/BENCHMARKS.md) for the schema, verdict rules, CI usage, and a local smoke test.
 
 ## Development
 
@@ -348,6 +357,7 @@ Useful documents:
 - [Adapter development](docs/ADAPTERS.md)
 - [Event schema](docs/EVENT_SCHEMA.md)
 - [Scoring methodology](docs/SCORING.md)
+- [Benchmark evaluation](docs/BENCHMARKS.md)
 - [Privacy and security](docs/PRIVACY.md)
 - [OpenRouter analysis](docs/OPENROUTER_ANALYSIS.md)
 

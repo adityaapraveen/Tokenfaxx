@@ -62,7 +62,7 @@ describe("OpenRouter analysis", () => {
                   anomalies: [
                     {
                       observation: "Unsupported",
-                      evidenceEventIds: ["invented-id"],
+                      evidenceEventIds: ["session-id"],
                       confidence: 90,
                     },
                   ],
@@ -78,7 +78,10 @@ describe("OpenRouter analysis", () => {
       );
     await expect(
       analyzeWithOpenRouter(
-        { events: [{ id: "real-id" }] },
+        {
+          session: { id: "session-id" },
+          events: [{ id: "real-event-id" }],
+        },
         {
           apiKey: "secret",
           model: "test/model",
@@ -87,7 +90,7 @@ describe("OpenRouter analysis", () => {
           fetchImpl,
         },
       ),
-    ).rejects.toThrow(/unknown evidence ID/);
+    ).rejects.toThrow(/unknown evidence ID 'session-id'/);
   });
 
   it("returns a bounded structured task profile", async () => {
