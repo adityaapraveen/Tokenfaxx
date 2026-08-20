@@ -20,12 +20,28 @@ TokenFaxx evaluates a session—not a developer. Token counts and lines changed 
 
 ## Requirements
 
-- Node.js 20 or newer
-- pnpm 9.15.9 (the version pinned in `package.json`)
+- Node.js 20 or 22
 - Git
 - Native build tooling supported by `better-sqlite3` if a prebuilt binary is unavailable
 - Optional: Codex or Claude CLI
 - Optional: an OpenRouter account, credits, and API key for AI features
+
+## Install
+
+Run TokenFaxx without a permanent installation:
+
+```bash
+npx tokenfaxx@latest init
+```
+
+Or install the CLI globally:
+
+```bash
+npm install --global tokenfaxx
+tokenfaxx --version
+```
+
+Global npm installations are scoped to the active Node installation. If you use NVM, install TokenFaxx separately for each Node version where you need it.
 
 ## Install for development
 
@@ -36,11 +52,12 @@ corepack enable
 corepack prepare pnpm@9.15.9 --activate
 pnpm install --frozen-lockfile
 pnpm build
-pnpm --filter tokenfaxx link --global
+cd apps/cli
+npm link
 tokenfaxx --version
 ```
 
-If `pnpm` is already installed at the required version, skip the two Corepack commands. The global link is for local development; publishing the CLI to npm is a future release task.
+If `pnpm` is already installed at the required version, skip the two Corepack commands. The npm link is only for development; normal users should install the published package.
 
 ## Start tracking a repository
 
@@ -373,4 +390,4 @@ Useful documents:
 
 ## License and releases
 
-No license has been added yet, so the repository is not ready for open-source redistribution. Choose a license, add release automation, and publish packages only after the P0 release gates in the [product audit](docs/PRODUCT_AUDIT.md) are complete.
+TokenFaxx is available under the [MIT License](LICENSE). Published releases are generated as a standalone CLI artifact: internal workspace packages are bundled, while audited third-party runtime dependencies remain normal npm dependencies.

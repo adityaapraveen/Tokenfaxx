@@ -13,12 +13,16 @@ export async function loadConfig(repository: string): Promise<TokenFaxxConfig> {
   try {
     // A globally installed CLI must resolve defineConfig from its own dependency
     // graph, not require every tracked repository to install @tokenfaxx/core.
+    const bundledConfigApi = fileURLToPath(
+      new URL("./config-api.js", import.meta.url),
+    );
+    const configApi = fs.existsSync(bundledConfigApi)
+      ? bundledConfigApi
+      : fileURLToPath(import.meta.resolve("@tokenfaxx/core"));
     const jiti = createJiti(import.meta.url, {
       interopDefault: true,
       alias: {
-        "@tokenfaxx/core": fileURLToPath(
-          import.meta.resolve("@tokenfaxx/core"),
-        ),
+        "@tokenfaxx/core": configApi,
       },
     });
     const loaded = await jiti.import(filename, { default: true });

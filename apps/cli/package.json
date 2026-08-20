@@ -1,6 +1,7 @@
 {
   "name": "tokenfaxx",
   "version": "0.1.0",
+  "private": true,
   "description": "Local-first observability and evaluation for coding agents",
   "type": "module",
   "main": "dist/index.js",
@@ -14,13 +15,23 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/banner.mjs",
+    "build": "node scripts/build.mjs",
+    "package:check": "node scripts/verify-package.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
+    "better-sqlite3": "^11.9.1",
+    "commander": "^13.1.0",
+    "drizzle-orm": "^0.45.2",
+    "jiti": "^2.4.2",
+    "pino": "^9.6.0",
+    "simple-git": "^3.27.0",
+    "zod": "^3.24.3"
+  },
+  "devDependencies": {
     "@tokenfaxx/analysis": "workspace:*",
     "@tokenfaxx/adapters": "workspace:*",
     "@tokenfaxx/collectors": "workspace:*",
@@ -28,10 +39,6 @@
     "@tokenfaxx/scoring": "workspace:*",
     "@tokenfaxx/shared": "workspace:*",
     "@tokenfaxx/storage": "workspace:*",
-    "commander": "^13.1.0",
-    "jiti": "^2.4.2",
-    "pino": "^9.6.0",
-    "simple-git": "^3.27.0",
-    "zod": "^3.24.3"
+    "esbuild": "^0.28.1"
   }
 }
