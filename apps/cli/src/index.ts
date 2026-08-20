@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { Command } from "commander";
 import pino from "pino";
@@ -49,6 +49,23 @@ const program = new Command()
   .description("Local-first observability and evaluation for coding agents")
   .version("0.1.0");
 const root = (): string => path.resolve(process.cwd());
+
+function isDirectExecution(
+  argvEntry: string | undefined,
+  moduleUrl = import.meta.url,
+): boolean {
+  if (!argvEntry) return false;
+  try {
+    // Package-manager bin entries are symlinks. Compare their real paths so a
+    // globally linked CLI executes while importing this module in tests does not.
+    return (
+      fs.realpathSync(argvEntry) === fs.realpathSync(fileURLToPath(moduleUrl))
+    );
+  } catch {
+    return pathToFileURL(path.resolve(argvEntry)).href === moduleUrl;
+  }
+}
+
 const openDb = (storageRoot = root()): TokenFaxxDatabase =>
   new TokenFaxxDatabase(databasePath(storageRoot));
 
@@ -967,7 +984,7 @@ program
       `Node.js ${process.versions.node}`,
       "Install Node.js 20 or newer",
     ]);
-    for (const executable of ["git", "pnpm"] as const) {
+    for (const executable of ["git"] as const) {
       const found =
         spawnSync(executable, ["--version"], { stdio: "ignore" }).status === 0;
       checks.push([
@@ -989,6 +1006,21 @@ program
         false,
         "TokenFaxx configuration is invalid",
         error instanceof Error ? error.message : String(error),
+      ]);
+    }
+    if (
+      loadedConfig &&
+      Object.values(loadedConfig.validation).some(
+        (validation) =>
+          validation?.enabled && /(^|\s)pnpm(?=\s|$)/.test(validation.command),
+      )
+    ) {
+      const found =
+        spawnSync("pnpm", ["--version"], { stdio: "ignore" }).status === 0;
+      checks.push([
+        found,
+        `pnpm ${found ? "available" : "not found"}`,
+        "A configured validation uses pnpm; install it and add it to PATH",
       ]);
     }
     try {
@@ -1135,10 +1167,7 @@ benchmark
     db.close();
   });
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isDirectExecution(process.argv[1])) {
   program.parseAsync().catch((error: unknown) => {
     process.stderr.write(
       `TokenFaxx error: ${error instanceof Error ? error.message : String(error)}\n`,
@@ -1147,4 +1176,4 @@ if (
   });
 }
 
-export { runTracked, sanitizedEvidenceBundle };
+export { isDirectExecution, runTracked, sanitizedEvidenceBundle };

@@ -20,7 +20,7 @@
     "@tokenfaxx/core": "workspace:*",
     "@tokenfaxx/shared": "workspace:*",
     "better-sqlite3": "^11.9.1",
-    "drizzle-orm": "^0.43.1"
+    "drizzle-orm": "^0.45.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13"
