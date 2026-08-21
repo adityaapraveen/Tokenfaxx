@@ -17,6 +17,30 @@ describe("scoring", () => {
       failed.components.find((c) => c.name === "tokenEfficiency")?.normalized,
     ).toBeNull();
   });
+  it("does not use estimated usage for efficiency scoring", () => {
+    const result = evaluate(
+      {
+        outcome: "completed-validated",
+        commitCount: 1,
+        filesChanged: 1,
+        validations: [{ type: "test", status: "passed" }],
+        totalTokens: 100,
+        costUsd: 0.01,
+        maximumCostUsd: 1,
+        usageMeasurement: "estimated",
+        taskProfile: {
+          taskType: "bugfix",
+          validationCount: 1,
+          complexity: "small",
+          complexitySource: "user",
+          tags: [],
+        },
+      },
+      defaultConfig(),
+    );
+    expect(result.components.find((c) => c.name === "tokenEfficiency")?.normalized).toBeNull();
+    expect(result.components.find((c) => c.name === "costEfficiency")?.normalized).toBeNull();
+  });
   it("returns insufficient data for unknown outcome", () =>
     expect(
       evaluate(

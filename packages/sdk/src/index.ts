@@ -140,10 +140,21 @@ export class TrackedSession {
   }): Promise<void> {
     const bundle = this.db.getBundle(this.id);
     if (!bundle) throw new Error(`Session ${this.id} no longer exists`);
+    const exitCode = result.exitCode ?? null;
+    if (bundle.session.status !== "running") {
+      if (
+        bundle.session.status === result.status &&
+        bundle.session.childProcessExitCode === exitCode
+      )
+        return;
+      throw new Error(
+        `Session ${this.id} is already ${bundle.session.status} and cannot be completed as ${result.status}`,
+      );
+    }
     const durationMs = Date.now() - Date.parse(bundle.session.startedAt);
     this.record("session.completed", {
       status: result.status,
-      exitCode: result.exitCode ?? null,
+      exitCode,
       durationMs,
     });
     if (result.taskOutcome)

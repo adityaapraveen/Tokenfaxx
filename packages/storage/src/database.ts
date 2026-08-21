@@ -70,6 +70,7 @@ export class TokenFaxxDatabase {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     this.sqlite = new Database(filename);
     this.sqlite.pragma("foreign_keys = ON");
+    this.sqlite.pragma("busy_timeout = 5000");
     this.sqlite.pragma("journal_mode = WAL");
     this.sqlite.exec(migration);
     this.ensureColumn(
@@ -403,6 +404,13 @@ export class TokenFaxxDatabase {
       .where(eq(schema.sessions.id, id))
       .get();
     if (!row) throw new Error(`Session ${id} was not found`);
+    if (row.status !== "running") {
+      if (row.status === status && row.childProcessExitCode === exitCode) return;
+      throw new TokenFaxxError(
+        `Session ${id} is already ${row.status}`,
+        "SESSION_ALREADY_COMPLETED",
+      );
+    }
     const completedAt = nowIso();
     this.db
       .update(schema.sessions)
@@ -549,10 +557,15 @@ export class TokenFaxxDatabase {
     );
   }
   deleteSession(id: string): boolean {
-    return (
-      this.db.delete(schema.sessions).where(eq(schema.sessions.id, id)).run()
-        .changes > 0
-    );
+    const deleted = this.db
+      .delete(schema.sessions)
+      .where(eq(schema.sessions.id, id))
+      .run().changes;
+    if (deleted > 0)
+      this.sqlite.exec(
+        "DELETE FROM projects WHERE id NOT IN (SELECT DISTINCT project_id FROM sessions)",
+      );
+    return deleted > 0;
   }
   deleteAll(): void {
     this.sqlite.transaction(() => {
@@ -561,9 +574,14 @@ export class TokenFaxxDatabase {
   }
   applyRetention(days: number): number {
     const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
-    return this.db
+    const deleted = this.db
       .delete(schema.sessions)
       .where(lt(schema.sessions.startedAt, cutoff))
       .run().changes;
+    if (deleted > 0)
+      this.sqlite.exec(
+        "DELETE FROM projects WHERE id NOT IN (SELECT DISTINCT project_id FROM sessions)",
+      );
+    return deleted;
   }
 }

@@ -26,6 +26,51 @@ describe("validation", () => {
         )
       ).status,
     ).toBe("timed-out"));
+  it("rejects result files outside the validation directory", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "tokenfaxx-validation-root-"),
+    );
+    const outside = fs.mkdtempSync(
+      path.join(os.tmpdir(), "tokenfaxx-validation-outside-"),
+    );
+    fs.writeFileSync(path.join(outside, "results.json"), "{}");
+    const result = await runValidation(
+      "test",
+      `node -e "process.exit(0)"`,
+      1000,
+      directory,
+      { parser: "jest", resultFile: path.join(outside, "results.json") },
+    );
+    expect(result.details.source).toBe("exit-code");
+    expect(result.details.limitations[0]).toContain(
+      "escapes the validation working directory",
+    );
+    fs.rmSync(directory, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+  it("rejects result-file symlinks that escape the validation directory", async () => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "tokenfaxx-validation-root-"),
+    );
+    const outside = fs.mkdtempSync(
+      path.join(os.tmpdir(), "tokenfaxx-validation-outside-"),
+    );
+    const target = path.join(outside, "results.json");
+    fs.writeFileSync(target, "{}");
+    fs.symlinkSync(target, path.join(directory, "results.json"));
+    const result = await runValidation(
+      "test",
+      `node -e "process.exit(0)"`,
+      1000,
+      directory,
+      { parser: "jest", resultFile: "results.json" },
+    );
+    expect(result.details.limitations[0]).toContain(
+      "escapes the validation working directory",
+    );
+    fs.rmSync(directory, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
   it("extracts machine-readable test counts", async () => {
     const directory = fs.mkdtempSync(
       path.join(os.tmpdir(), "tokenfaxx-validation-"),

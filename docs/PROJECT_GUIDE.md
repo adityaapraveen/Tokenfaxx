@@ -343,10 +343,10 @@ The database uses `better-sqlite3` and Drizzle ORM.
 ### Current storage limitations
 
 - Migration bootstrap and column upgrades are embedded in `database.ts`, not immutable checked migration files.
-- There is no `busy_timeout`/retry strategy for many concurrent SDK writers.
+- A five-second SQLite `busy_timeout` handles short writer contention, but there is no higher-level retry strategy for many concurrent SDK writers.
 - Bulk export performs per-session bundle queries and is not optimized for very large histories.
 - There is no backup/restore command or corruption recovery flow.
-- Session completion is not yet explicitly idempotent.
+- Identical repeated session completion is idempotent and conflicting completion is rejected; crash-driven stale-session recovery is still missing.
 
 SQLite remains the right default for a private, local MVP. These limitations become urgent only as concurrency, data lifetime, or hosted use increases.
 
@@ -416,7 +416,7 @@ Each definition contains a command, timeout, enabled flag, parser, and optional 
 | `typescript` | compiler output          | TS diagnostic count                    | counts text patterns                           |
 | `none`       | exit code                | no detailed metrics                    | only pass/fail evidence                        |
 
-Validation output is streamed to the terminal but only a bounded amount is retained in memory for parsing; raw output is not persisted. A configured machine-readable `resultFile` is stronger evidence. The current implementation should additionally constrain result files against path and symlink escape before being treated as hardened for untrusted repositories.
+Validation output is streamed to the terminal but only a bounded amount is retained in memory for parsing; raw output is not persisted. A configured machine-readable `resultFile` is stronger evidence. Result files are resolved to real paths, must remain regular files inside the validation working directory, and are rejected when they escape through an absolute/parent path or symlink or exceed the configured output-size limit.
 
 ### Security model for commands
 
@@ -1077,7 +1077,7 @@ try {
 - It does not automatically take Git snapshots.
 - It does not run configured validators.
 - It does not calculate/save the complete score on completion.
-- It does not guard duplicate completion as a defined idempotent operation.
+- Repeating the same completion is a no-op and a conflicting completion is rejected, but abandoned-session recovery is not automatic.
 - The caller is responsible for mapping provider fields accurately.
 
 A high-level `evaluateSession()` or orchestration facade that mirrors CLI completion is a strong next SDK feature.
