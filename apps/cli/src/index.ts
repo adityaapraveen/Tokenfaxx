@@ -69,6 +69,16 @@ function isDirectExecution(
 const openDb = (storageRoot = root()): TokenFaxxDatabase =>
   new TokenFaxxDatabase(databasePath(storageRoot));
 
+function safeChildEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const blocked = /(KEY|TOKEN|SECRET|PASSWORD|PASS|CREDENTIAL|AUTH)/i;
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) =>
+      name === "PATH" || name === "HOME" || name === "USER" || name === "SHELL" || !blocked.test(name),
+    ),
+  );
+  return { ...env, ...extra };
+}
+
 function event(
   db: TokenFaxxDatabase,
   session: { id: string; agent: string; taskId: string | null },
@@ -300,6 +310,8 @@ async function runTracked(options: RunOptions): Promise<{
 }> {
   const repository = options.repository ?? root();
   const storageRoot = options.storageRoot ?? repository;
+  if (options.agent && options.command)
+    throw new Error("Use either --agent or --command, not both");
   const config = options.config ?? (await loadConfig(repository));
   if (options.aiProfile && !options.task)
     throw new Error("--ai-profile requires --task <description>");
@@ -442,7 +454,7 @@ async function runTracked(options: RunOptions): Promise<{
       const child = spawn(launch.command, launch.args, {
         cwd: repository,
         stdio: "inherit",
-        env: { ...process.env, ...launch.env },
+        env: safeChildEnv(launch.env),
         shell: adapter.name === "custom",
         detached: adapter.name === "custom" && process.platform !== "win32",
       });

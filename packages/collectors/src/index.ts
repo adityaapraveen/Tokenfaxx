@@ -280,18 +280,32 @@ function parseValidation(
   output: string,
   resultFile: string | undefined,
   cwd: string,
+  maxResultBytes: number,
 ): ValidationDetails {
   let content = output;
   let source: ValidationDetails["source"] = "terminal-summary";
   if (resultFile) {
     try {
-      content = fs.readFileSync(path.resolve(cwd, resultFile), "utf8");
+      const repositoryRoot = fs.realpathSync(cwd);
+      const resolvedResult = fs.realpathSync(path.resolve(repositoryRoot, resultFile));
+      const relative = path.relative(repositoryRoot, resolvedResult);
+      if (
+        relative === ".." ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative)
+      )
+        throw new Error("path escapes the validation working directory");
+      const stat = fs.statSync(resolvedResult);
+      if (!stat.isFile()) throw new Error("path is not a regular file");
+      if (stat.size > maxResultBytes)
+        throw new Error(`file exceeds the ${maxResultBytes}-byte limit`);
+      content = fs.readFileSync(resolvedResult, "utf8");
       source = "machine-readable";
-    } catch {
+    } catch (error) {
       return {
         ...emptyDetails(parser),
         limitations: [
-          `Configured result file '${resultFile}' was not readable`,
+          `Configured result file '${resultFile}' was not readable safely: ${error instanceof Error ? error.message : String(error)}`,
         ],
       };
     }
@@ -404,6 +418,15 @@ function parseValidation(
   }
   return emptyDetails(String(selected ?? "none"));
 }
+function safeValidationEnv(): NodeJS.ProcessEnv {
+  const blocked = /(KEY|TOKEN|SECRET|PASSWORD|PASS|CREDENTIAL|AUTH)/i;
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([name]) =>
+      name === "PATH" || name === "HOME" || name === "USER" || name === "SHELL" || !blocked.test(name),
+    ),
+  );
+}
+
 export async function runValidation(
   type: ValidationType,
   command: string,
@@ -418,7 +441,7 @@ export async function runValidation(
       cwd,
       shell: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: safeValidationEnv(),
       detached: process.platform !== "win32",
     });
     let timedOut = false;
@@ -472,6 +495,7 @@ export async function runValidation(
           output,
           options.resultFile,
           cwd,
+          limit,
         ),
       });
     });

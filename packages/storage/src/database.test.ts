@@ -55,6 +55,34 @@ describe("storage", () => {
     expect(db.listSessions()).toHaveLength(0);
     db.close();
   });
+  it("makes identical completion idempotent and rejects conflicts", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tokenfaxx-complete-"));
+    dirs.push(dir);
+    const db = new TokenFaxxDatabase(path.join(dir, "db.sqlite"));
+    const session = db.createSession({
+      repository: dir,
+      projectName: "test",
+      agent: "custom",
+      adapterVersion: "1",
+    });
+    db.completeSession(session.id, "completed", 0);
+    const first = db.getBundle(session.id)?.session;
+    db.completeSession(session.id, "completed", 0);
+    expect(db.getBundle(session.id)?.session.completedAt).toBe(
+      first?.completedAt,
+    );
+    expect(() => db.completeSession(session.id, "failed", 1)).toThrow(
+      /already completed/,
+    );
+    db.close();
+  });
+  it("configures a busy timeout for concurrent writers", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tokenfaxx-busy-"));
+    dirs.push(dir);
+    const db = new TokenFaxxDatabase(path.join(dir, "db.sqlite"));
+    expect(db.sqlite.pragma("busy_timeout", { simple: true })).toBe(5000);
+    db.close();
+  });
   it("stores analysis separately from coding-agent usage", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tokenfaxx-"));
     dirs.push(dir);

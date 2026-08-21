@@ -28,20 +28,9 @@ TokenFaxx evaluates a session—not a developer. Token counts and lines changed 
 
 ## Install
 
-Run TokenFaxx without a permanent installation:
+The `tokenfaxx` package is not public on npm yet (`npm view tokenfaxx version` currently returns `E404`), so `npx tokenfaxx@latest` and `npm install --global tokenfaxx` will not work until the first release is published. Use the development install below for now.
 
-```bash
-npx tokenfaxx@latest init
-```
-
-Or install the CLI globally:
-
-```bash
-npm install --global tokenfaxx
-tokenfaxx --version
-```
-
-Global npm installations are scoped to the active Node installation. If you use NVM, install TokenFaxx separately for each Node version where you need it.
+After publication, users will be able to run `npx tokenfaxx@latest init` or install it globally. Global npm installations are scoped to the active Node installation; NVM users must install it separately for each Node version.
 
 ## Install for development
 
@@ -57,7 +46,7 @@ npm link
 tokenfaxx --version
 ```
 
-If `pnpm` is already installed at the required version, skip the two Corepack commands. The npm link is only for development; normal users should install the published package.
+If `pnpm` is already installed at the required version, skip the two Corepack commands. The npm link is the supported install path until the package is published.
 
 ## Start tracking a repository
 
@@ -390,4 +379,4 @@ Useful documents:
 
 ## License and releases
 
-TokenFaxx is available under the [MIT License](LICENSE). Published releases are generated as a standalone CLI artifact: internal workspace packages are bundled, while audited third-party runtime dependencies remain normal npm dependencies.
+TokenFaxx is available under the [MIT License](LICENSE). The prepared release artifact is a standalone CLI bundle: internal workspace packages are bundled, while audited third-party runtime dependencies remain normal npm dependencies. The package has not yet been published to npm.

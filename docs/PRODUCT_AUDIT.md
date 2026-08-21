@@ -28,7 +28,7 @@ AI should not replace deterministic evidence. Its appropriate roles here are tas
 | AI task profiling   | Added                | Alpha      | Description-only inference; calibration still required             |
 | Privacy controls    | Strong defaults      | Alpha/Beta | Needs threat model, fuzzing, and secret-leak regression suite      |
 | Team/cloud product  | No                   | Missing    | Identity, sync, RBAC, projects, audit log, billing                 |
-| Delivery operations | No                   | Missing    | CI, releases, license, security policy, support policy             |
+| Delivery operations | Partial              | Alpha      | Linux Node 20/22 CI, MIT license, and package verifier exist; publication, provenance, security/support policy, and broader OS coverage remain |
 
 ## What is already good
 
@@ -100,7 +100,7 @@ Benchmark definitions now require at least one known expectation, enforce a one-
 
 Where: `packages/sdk/src/index.ts` records events and completes sessions but does not collect Git boundaries, validations, or save scores.
 
-Add either a high-level SDK orchestrator that mirrors CLI completion, or a documented contract where the host records validations/outcomes and calls `evaluateSession()`. Protect completion against duplicate calls and add an abandoned-session recovery policy.
+Add either a high-level SDK orchestrator that mirrors CLI completion, or a documented contract where the host records validations/outcomes and calls `evaluateSession()`. Identical completion calls are now no-ops and conflicting completion is rejected; an abandoned-session recovery policy is still needed.
 
 ### 7. Rework and attribution inputs are partially dead
 

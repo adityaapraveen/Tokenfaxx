@@ -232,12 +232,14 @@ export function evaluate(
   const tokenNorm =
     input.totalTokens == null ||
     tokenBaseline == null ||
+    input.usageMeasurement === "estimated" ||
     (outcomeNorm ?? 0) < 70
       ? null
       : clamp(100 - Math.max(0, input.totalTokens / tokenBaseline - 1) * 35);
   const costNorm =
     input.costUsd == null ||
     input.maximumCostUsd == null ||
+    input.usageMeasurement === "estimated" ||
     (outcomeNorm ?? 0) < 70
       ? null
       : clamp(

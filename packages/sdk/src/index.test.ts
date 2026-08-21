@@ -25,6 +25,25 @@ function repository(): { directory: string; databasePath: string } {
 }
 
 describe("SDK configured pricing", () => {
+  it("makes repeated identical completion a no-op", async () => {
+    const { directory, databasePath } = repository();
+    const tracker = new TokenFaxx({
+      agent: "test-agent",
+      repository: directory,
+    });
+    const session = await tracker.startSession();
+    await session.complete({ status: "completed", exitCode: 0 });
+    await session.complete({ status: "completed", exitCode: 0 });
+    tracker.close();
+
+    const db = new TokenFaxxDatabase(databasePath);
+    const bundle = db.getBundle(session.id);
+    expect(
+      bundle?.events.filter((event) => event.eventType === "session.completed"),
+    ).toHaveLength(1);
+    db.close();
+  });
+
   it("calculates missing cost and persists independent provenance", async () => {
     const { directory, databasePath } = repository();
     const tracker = new TokenFaxx({
