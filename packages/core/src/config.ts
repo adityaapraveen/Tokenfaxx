@@ -8,7 +8,7 @@ const validationCommandSchema = z.object({
     .enum(["auto", "vitest", "jest", "junit", "eslint", "typescript", "none"])
     .default("auto"),
   resultFile: z.string().optional(),
-});
+}).strict();
 const weightsSchema = z
   .object({
     outcome: z.number().min(0).max(1),
@@ -18,6 +18,7 @@ const weightsSchema = z
     rework: z.number().min(0).max(1),
     attributionConfidence: z.number().min(0).max(1),
   })
+  .strict()
   .refine(
     (weights) =>
       Math.abs(Object.values(weights).reduce((a, b) => a + b, 0) - 1) < 0.0001,
@@ -32,7 +33,7 @@ export const defaultWeights = {
   attributionConfidence: 0.1,
 } as const;
 export const configSchema = z.object({
-  project: z.object({ name: z.string().min(1).optional() }).default({}),
+  project: z.object({ name: z.string().min(1).optional() }).strict().default({}),
   collection: z
     .object({
       gitSampleIntervalMs: z.number().int().min(1000).max(60000).default(3000),
@@ -43,6 +44,7 @@ export const configSchema = z.object({
         .max(5_000_000)
         .default(500_000),
     })
+    .strict()
     .default({}),
   validation: z
     .object({
@@ -51,9 +53,11 @@ export const configSchema = z.object({
       lint: validationCommandSchema.optional(),
       typecheck: validationCommandSchema.optional(),
     })
+    .strict()
     .default({}),
   scoring: z
     .object({ weights: weightsSchema.default(defaultWeights) })
+    .strict()
     .default({ weights: defaultWeights }),
   privacy: z
     .object({
@@ -63,6 +67,7 @@ export const configSchema = z.object({
       storeDiffContents: z.literal(false).default(false),
       retentionDays: z.number().int().positive().optional(),
     })
+    .strict()
     .default({}),
   pricing: z
     .object({
@@ -76,7 +81,7 @@ export const configSchema = z.object({
             cachedInputPerMillionUsd: z.number().nonnegative().optional(),
             effectiveDate: z.string().optional(),
             source: z.string().optional(),
-          }),
+          }).strict(),
         )
         .superRefine((prices, context) => {
           const seen = new Set<string>();
@@ -93,6 +98,7 @@ export const configSchema = z.object({
         })
         .default([]),
     })
+    .strict()
     .default({ custom: [] }),
   analysis: z
     .object({
@@ -105,8 +111,9 @@ export const configSchema = z.object({
       sendDiffContents: z.literal(false).default(false),
       sendPrompts: z.literal(false).default(false),
     })
+    .strict()
     .default({}),
-});
+}).strict();
 export type TokenFaxxConfig = z.infer<typeof configSchema>;
 export const defineConfig = (
   config: z.input<typeof configSchema>,

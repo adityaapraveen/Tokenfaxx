@@ -43,7 +43,7 @@ describe("storage", () => {
           .prepare("SELECT MAX(version) AS version FROM _migrations")
           .get() as { version: number }
       ).version,
-    ).toBe(3);
+    ).toBe(4);
     const session = db.createSession({
       repository: dir,
       projectName: "test",
@@ -81,6 +81,35 @@ describe("storage", () => {
     dirs.push(dir);
     const db = new TokenFaxxDatabase(path.join(dir, "db.sqlite"));
     expect(db.sqlite.pragma("busy_timeout", { simple: true })).toBe(5000);
+    db.close();
+  });
+  it("tracks heartbeats and identifies only stale running sessions", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tokenfaxx-heartbeat-"));
+    dirs.push(dir);
+    const db = new TokenFaxxDatabase(path.join(dir, "db.sqlite"));
+    const stale = db.createSession({
+      repository: dir,
+      projectName: "test",
+      agent: "custom",
+      adapterVersion: "1",
+    });
+    const active = db.createSession({
+      repository: `${dir}-active`,
+      projectName: "active",
+      agent: "custom",
+      adapterVersion: "1",
+    });
+    db.heartbeatSession(stale.id, "2020-01-01T00:00:00.000Z");
+    db.heartbeatSession(active.id, "2030-01-01T00:00:00.000Z");
+    expect(
+      db
+        .listStaleRunningSessions("2025-01-01T00:00:00.000Z")
+        .map((row) => row.id),
+    ).toEqual([stale.id]);
+    db.completeSession(stale.id, "interrupted", null);
+    expect(
+      db.listStaleRunningSessions("2035-01-01T00:00:00.000Z"),
+    ).toHaveLength(1);
     db.close();
   });
   it("stores analysis separately from coding-agent usage", () => {
@@ -164,7 +193,7 @@ describe("storage", () => {
           .prepare("SELECT MAX(version) AS version FROM _migrations")
           .get() as { version: number }
       ).version,
-    ).toBe(3);
+    ).toBe(4);
     db.close();
   });
   it("treats an identical event ID as an idempotent retry", () => {

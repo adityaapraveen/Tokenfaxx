@@ -4,7 +4,7 @@ TokenFaxx is a local-first CLI and TypeScript SDK for observing and evaluating c
 
 TokenFaxx evaluates a session—not a developer. Token counts and lines changed are context, never standalone productivity measures.
 
-> Project status: alpha (`0.1.0`). The local CLI/SDK vertical slice works, but hosted collaboration, provider-grade CLI usage capture, CI/PR enrichment, and production release automation are not complete. See [the product audit and roadmap](docs/PRODUCT_AUDIT.md).
+> Project status: alpha (`0.1.0`). The local CLI/SDK vertical slice works, including opt-in provider-reported usage for structured Codex and Claude runs, but hosted collaboration, broad provider compatibility, CI/PR enrichment, and production release automation are not complete. See [the product audit and roadmap](docs/PRODUCT_AUDIT.md).
 
 ## What works today
 
@@ -132,6 +132,15 @@ tokenfaxx run --command "node my-agent.js" --task "Implement the cache fix"
 ```
 
 Interactive input, output, color, and signals are preserved. Raw terminal output is forwarded and discarded, not stored.
+
+For provider-reported token usage, use the non-interactive structured adapters and put the provider prompt/arguments after `--`:
+
+```bash
+tokenfaxx run --agent codex-json --complexity medium -- "Fix notification migration"
+tokenfaxx run --agent claude-json --complexity medium -- "Fix notification migration"
+```
+
+These launch `codex exec --json` and `claude -p --verbose --output-format stream-json`. TokenFaxx parses only bounded usage fields, forwards but does not store the JSONL stream, keeps the latest cumulative Codex snapshot, and deduplicates Claude assistant usage by message ID. Interactive `codex` and `claude` adapters remain available when terminal UX is more important than usage telemetry.
 
 ## AI features
 
@@ -369,11 +378,12 @@ Useful documents:
 
 ## Troubleshooting
 
-- Run `tokenfaxx doctor` in the tracked Git repository.
+- Run `tokenfaxx doctor` in the tracked Git repository. It does not execute `tokenfaxx.config.ts` by default; use `--execute-config` only after trusting the repository.
 - If `pnpm` is not found, run `corepack enable && corepack prepare pnpm@9.15.9 --activate`.
 - If configuration import fails, verify `tokenfaxx.config.ts` exports a `defineConfig(...)` result or plain compatible object.
 - If SQLite installation fails, install a supported compiler toolchain and Python, then reinstall dependencies.
-- If usage is unavailable, use SDK instrumentation. Codex/Claude terminal adapters intentionally do not scrape unstable UI output.
+- If usage is unavailable, use `codex-json`, `claude-json`, or SDK instrumentation. Interactive Codex/Claude adapters intentionally do not scrape unstable UI output.
+- `tokenfaxx doctor` reports stale running sessions; after confirming no agent process remains, use `tokenfaxx doctor --repair` to finalize them as interrupted.
 - If AI analysis fails, verify the API key, credits, model structured-output support, timeout, and outbound network access.
 - If a session was interrupted, it should be finalized as interrupted when the child responds to the forwarded signal; inspect `tokenfaxx sessions` and the local database if the host was force-killed.
 

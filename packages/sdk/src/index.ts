@@ -41,13 +41,28 @@ export interface ModelUsage {
   source?: string;
 }
 export class TrackedSession {
+  private readonly heartbeat: NodeJS.Timeout;
   constructor(
     readonly id: string,
     private readonly options: TokenFaxxOptions,
     private readonly db: TokenFaxxDatabase,
     private readonly config: TokenFaxxConfig,
     private readonly taskId?: string,
-  ) {}
+    private readonly onDispose?: (session: TrackedSession) => void,
+  ) {
+    this.heartbeat = setInterval(() => {
+      try {
+        this.db.heartbeatSession(this.id);
+      } catch {
+        /* lifecycle cleanup is best effort during shutdown */
+      }
+    }, 10_000);
+    this.heartbeat.unref();
+  }
+  dispose(): void {
+    clearInterval(this.heartbeat);
+    this.onDispose?.(this);
+  }
   private record(
     eventType: EventType,
     payload: Record<string, unknown>,
@@ -145,8 +160,10 @@ export class TrackedSession {
       if (
         bundle.session.status === result.status &&
         bundle.session.childProcessExitCode === exitCode
-      )
+      ) {
+        this.dispose();
         return;
+      }
       throw new Error(
         `Session ${this.id} is already ${bundle.session.status} and cannot be completed as ${result.status}`,
       );
@@ -163,10 +180,12 @@ export class TrackedSession {
         evidence: ["Explicitly reported by SDK caller"],
       });
     this.db.completeSession(this.id, result.status, result.exitCode ?? null);
+    this.dispose();
   }
 }
 export class TokenFaxx {
   private readonly db: TokenFaxxDatabase;
+  private readonly sessions = new Set<TrackedSession>();
   private readonly config: TokenFaxxConfig;
   constructor(private readonly options: TokenFaxxOptions) {
     this.config = options.config ?? defaultConfig();
@@ -192,7 +211,9 @@ export class TokenFaxx {
       this.db,
       this.config,
       input.taskId,
+      (completed) => this.sessions.delete(completed),
     );
+    this.sessions.add(session);
     await session.recordEvent("session.started", {
       adapterVersion: this.options.adapterVersion ?? "sdk-1.0.0",
     });
@@ -203,6 +224,7 @@ export class TokenFaxx {
     return session;
   }
   close(): void {
+    for (const session of [...this.sessions]) session.dispose();
     this.db.close();
   }
 }

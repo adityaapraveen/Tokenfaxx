@@ -252,7 +252,7 @@ The main implementation is `runTracked()` in `apps/cli/src/index.ts`.
 - An automatic post-run AI analysis failure prints an unavailable warning and preserves the deterministic report.
 - Validation timeout sends `SIGTERM`, then `SIGKILL` after two seconds when necessary.
 - A signal-interrupted tracked run exits `130`.
-- A host crash can leave a session `running`; stale-session recovery is not implemented yet.
+- A host crash can leave a session `running`; active runs now maintain a heartbeat, `doctor` reports expired heartbeats, and explicit `doctor --repair` finalizes confirmed stale sessions as interrupted.
 
 ## 8. Event and evidence model
 
@@ -346,7 +346,7 @@ The database uses `better-sqlite3` and Drizzle ORM.
 - A five-second SQLite `busy_timeout` handles short writer contention, but there is no higher-level retry strategy for many concurrent SDK writers.
 - Bulk export performs per-session bundle queries and is not optimized for very large histories.
 - There is no backup/restore command or corruption recovery flow.
-- Identical repeated session completion is idempotent and conflicting completion is rejected; crash-driven stale-session recovery is still missing.
+- Identical repeated completion is idempotent, conflicting completion is rejected atomically, and heartbeat-based stale-session repair is explicit; automatic process-liveness proof across machines is still out of scope.
 
 SQLite remains the right default for a private, local MVP. These limitations become urgent only as concurrency, data lifetime, or hosted use increases.
 
@@ -541,10 +541,12 @@ Provider integrations should use official event streams, SDK callbacks, or a doc
 
 | Adapter      | Launches interactively | Exact usage | Model ID | Tool events | Cost | Lifecycle hooks |
 | ------------ | ---------------------- | ----------- | -------- | ----------- | ---- | --------------- |
-| Codex CLI    | yes                    | no          | no       | no          | no   | no              |
-| Claude CLI   | yes                    | no          | no       | no          | no   | no              |
-| Custom shell | yes                    | no          | no       | no          | no   | no              |
-| SDK          | no                     | yes         | yes      | yes         | yes  | yes             |
+| Codex CLI (`codex`) | yes | no | no | no | no | no |
+| Codex structured (`codex-json`) | no | provider-reported | when emitted | no | when emitted/configured | yes |
+| Claude CLI (`claude`) | yes | no | no | no | no | no |
+| Claude structured (`claude-json`) | no | provider-reported | when emitted | no | provider-reported/configured | yes |
+| Custom shell | yes | no | no | no | no | no |
+| SDK | no | yes | yes | yes | yes | yes |
 
 An adapter implements:
 
@@ -768,7 +770,7 @@ It refuses to overwrite an existing `tokenfaxx.config.ts`.
 tokenfaxx doctor
 ```
 
-Checks Node version, Git, repository status, configuration parsing, database access, adapter executables, conditionally required pnpm, and the OpenRouter key when automatic analysis is enabled. Warnings for an adapter you do not plan to use are informational. The current command prints warnings but does not yet provide a machine-readable mode or reliable non-zero failure status.
+Checks Node version, Git, repository status, database access, stale heartbeats, and adapter executables. It does not execute the TypeScript configuration by default; `--execute-config` opts into parsing it after repository trust is established. `--repair` explicitly finalizes confirmed stale sessions as interrupted. Warnings for an adapter you do not plan to use are informational. Machine-readable output and stronger required-check exit semantics remain future work.
 
 ### `run`
 

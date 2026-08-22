@@ -11,7 +11,7 @@ import * as schema from "./schema.js";
 const migration = `
 CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, repository_path TEXT NOT NULL UNIQUE, repository_remote TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, agent TEXT NOT NULL, adapter_version TEXT NOT NULL, task_id TEXT, task_description TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT, duration_ms INTEGER, child_process_exit_code INTEGER, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE, agent TEXT NOT NULL, adapter_version TEXT NOT NULL, task_id TEXT, task_description TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, heartbeat_at TEXT, completed_at TEXT, duration_ms INTEGER, child_process_exit_code INTEGER, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS sessions_project_started_idx ON sessions(project_id, started_at); CREATE INDEX IF NOT EXISTS sessions_agent_idx ON sessions(agent); CREATE INDEX IF NOT EXISTS sessions_task_idx ON sessions(task_id);
 CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, schema_version INTEGER NOT NULL, event_type TEXT NOT NULL, timestamp TEXT NOT NULL, payload TEXT NOT NULL, metadata TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS events_session_time_idx ON events(session_id, timestamp); CREATE INDEX IF NOT EXISTS events_type_idx ON events(event_type);
@@ -86,6 +86,10 @@ export class TokenFaxxDatabase {
     this.ensureColumn("model_usage", "cost_measurement", "TEXT");
     this.ensureColumn("model_usage", "cost_source", "TEXT");
     this.ensureColumn("model_usage", "pricing_effective_date", "TEXT");
+    this.ensureColumn("sessions", "heartbeat_at", "TEXT");
+    this.sqlite.exec(
+      "UPDATE sessions SET heartbeat_at = started_at WHERE heartbeat_at IS NULL",
+    );
     const migrationTimestamp = nowIso();
     this.sqlite
       .prepare(
@@ -95,6 +99,11 @@ export class TokenFaxxDatabase {
     this.sqlite
       .prepare(
         "INSERT OR IGNORE INTO _migrations(version, applied_at) VALUES (3, ?)",
+      )
+      .run(migrationTimestamp);
+    this.sqlite
+      .prepare(
+        "INSERT OR IGNORE INTO _migrations(version, applied_at) VALUES (4, ?)",
       )
       .run(migrationTimestamp);
     try {
@@ -142,7 +151,7 @@ export class TokenFaxxDatabase {
         .get(input.repository) as { id: string };
       this.sqlite
         .prepare(
-          "INSERT INTO sessions(id,project_id,agent,adapter_version,task_id,task_description,status,started_at,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO sessions(id,project_id,agent,adapter_version,task_id,task_description,status,started_at,heartbeat_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
         )
         .run(
           id,
@@ -152,6 +161,7 @@ export class TokenFaxxDatabase {
           input.taskId ?? null,
           input.taskDescription ?? null,
           "running",
+          timestamp,
           timestamp,
           timestamp,
         );
@@ -164,6 +174,7 @@ export class TokenFaxxDatabase {
         taskDescription: input.taskDescription ?? null,
         status: "running",
         startedAt: timestamp,
+        heartbeatAt: timestamp,
         completedAt: null,
         durationMs: null,
         childProcessExitCode: null,
@@ -397,31 +408,41 @@ export class TokenFaxxDatabase {
     id: string,
     status: "completed" | "failed" | "interrupted",
     exitCode: number | null,
+    completedAtOverride?: string,
   ): void {
-    const row = this.db
-      .select()
-      .from(schema.sessions)
-      .where(eq(schema.sessions.id, id))
-      .get();
-    if (!row) throw new Error(`Session ${id} was not found`);
-    if (row.status !== "running") {
-      if (row.status === status && row.childProcessExitCode === exitCode) return;
-      throw new TokenFaxxError(
-        `Session ${id} is already ${row.status}`,
-        "SESSION_ALREADY_COMPLETED",
-      );
-    }
-    const completedAt = nowIso();
-    this.db
-      .update(schema.sessions)
-      .set({
-        status,
-        completedAt,
-        durationMs: Date.parse(completedAt) - Date.parse(row.startedAt),
-        childProcessExitCode: exitCode,
-      })
-      .where(eq(schema.sessions.id, id))
-      .run();
+    const finalize = this.sqlite.transaction(() => {
+      const row = this.db
+        .select()
+        .from(schema.sessions)
+        .where(eq(schema.sessions.id, id))
+        .get();
+      if (!row) throw new Error(`Session ${id} was not found`);
+      if (row.status !== "running") {
+        if (row.status === status && row.childProcessExitCode === exitCode) return;
+        throw new TokenFaxxError(
+          `Session ${id} is already ${row.status}`,
+          "SESSION_ALREADY_COMPLETED",
+        );
+      }
+      const completedAt = completedAtOverride ?? nowIso();
+      const updated = this.sqlite
+        .prepare(
+          "UPDATE sessions SET status = ?, completed_at = ?, duration_ms = ?, child_process_exit_code = ? WHERE id = ? AND status = 'running'",
+        )
+        .run(
+          status,
+          completedAt,
+          Math.max(0, Date.parse(completedAt) - Date.parse(row.startedAt)),
+          exitCode,
+          id,
+        );
+      if (updated.changes !== 1)
+        throw new TokenFaxxError(
+          `Session ${id} was finalized concurrently`,
+          "SESSION_ALREADY_COMPLETED",
+        );
+    });
+    finalize();
   }
   saveScore(
     sessionId: string,
@@ -460,6 +481,28 @@ export class TokenFaxxDatabase {
         calculatedAt: nowIso(),
       })
       .run();
+  }
+  heartbeatSession(id: string, at = nowIso()): boolean {
+    return (
+      this.sqlite
+        .prepare(
+          "UPDATE sessions SET heartbeat_at = ? WHERE id = ? AND status = 'running'",
+        )
+        .run(at, id).changes > 0
+    );
+  }
+  listStaleRunningSessions(beforeIso: string): SessionRecord[] {
+    return this.db
+      .select()
+      .from(schema.sessions)
+      .where(
+        and(
+          eq(schema.sessions.status, "running"),
+          lt(schema.sessions.heartbeatAt, beforeIso),
+        ),
+      )
+      .orderBy(schema.sessions.startedAt)
+      .all() as SessionRecord[];
   }
   listSessions(
     filters: { agent?: string; taskId?: string; limit?: number } = {},
