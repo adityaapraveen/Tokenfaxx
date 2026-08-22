@@ -22,6 +22,12 @@ describe("configuration", () => {
     expect(defineConfig({}).privacy.storeTerminalOutput).toBe(false);
     expect(defineConfig({}).analysis.enabled).toBe(false);
   });
+  it("rejects unknown configuration keys instead of silently dropping typos", () => {
+    expect(() => defineConfig({ collecton: {} } as never)).toThrow(/Unrecognized key/);
+    expect(() =>
+      defineConfig({ collection: { gitSampleIntervalMs: 3000, typo: true } } as never),
+    ).toThrow(/Unrecognized key/);
+  });
   it("rejects ambiguous duplicate model pricing", () => {
     expect(() =>
       defineConfig({

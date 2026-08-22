@@ -4,14 +4,19 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import pino from "pino";
 import { simpleGit } from "simple-git";
 import {
   analyzeWithOpenRouter,
   inferTaskProfileWithOpenRouter,
 } from "@tokenfaxx/analysis";
-import { findAdapter, adapters } from "@tokenfaxx/adapters";
+import {
+  findAdapter,
+  adapters,
+  StructuredTelemetryCollector,
+  type ProviderUsageSnapshot,
+} from "@tokenfaxx/adapters";
 import {
   GitCollector,
   GitTimelineCollector,
@@ -22,6 +27,7 @@ import {
 import {
   BENCHMARK_DEFINITION_HASH_VERSION,
   benchmarkDefinitionSchema,
+  calculateConfiguredCost,
   evaluateBenchmarkExpectations,
   EVENT_SCHEMA_VERSION,
   hashBenchmarkDefinition,
@@ -97,6 +103,59 @@ function event(
     eventType,
     payload,
     metadata: {},
+  });
+}
+
+function recordProviderUsage(
+  db: TokenFaxxDatabase,
+  session: { id: string; agent: string; taskId: string | null },
+  repository: string,
+  usage: ProviderUsageSnapshot,
+  config: TokenFaxxConfig,
+): void {
+  const calculated =
+    usage.estimatedCostUsd === null &&
+    usage.model &&
+    usage.inputTokens !== null &&
+    usage.outputTokens !== null
+      ? calculateConfiguredCost(
+          {
+            provider: usage.provider,
+            model: usage.model,
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            ...(usage.cachedInputTokens !== null
+              ? { cachedInputTokens: usage.cachedInputTokens }
+              : {}),
+          },
+          config,
+        )
+      : null;
+  event(db, session, repository, "model.usage", {
+    provider: usage.provider,
+    model: usage.model,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cachedInputTokens: usage.cachedInputTokens,
+    reasoningTokens: usage.reasoningTokens,
+    totalTokens: usage.totalTokens,
+    estimatedCostUsd: usage.estimatedCostUsd ?? calculated?.usd ?? null,
+    ...(usage.estimatedCostUsd !== null
+      ? {
+          costMeasurement: "provider-reported",
+          costSource: usage.source,
+        }
+      : calculated
+        ? {
+            costMeasurement: calculated.measurement,
+            costSource: calculated.source,
+            ...(calculated.effectiveDate
+              ? { pricingEffectiveDate: calculated.effectiveDate }
+              : {}),
+          }
+        : {}),
+    measurement: "reported",
+    source: usage.source,
   });
 }
 
@@ -329,6 +388,9 @@ async function runTracked(options: RunOptions): Promise<{
     ...(options.command ? { command: options.command } : {}),
     passthroughArgs: options.passthroughArgs ?? [],
   });
+  const telemetry = launch.structuredTelemetry
+    ? new StructuredTelemetryCollector(launch.structuredTelemetry)
+    : null;
   const git = new GitCollector(repository);
   const repositoryInfo = await git.repositoryInfo();
   const before = await git.snapshot();
@@ -345,6 +407,14 @@ async function runTracked(options: RunOptions): Promise<{
     ...(options.task ? { taskDescription: options.task } : {}),
   });
   db.addGitSnapshot(session.id, "before", before);
+  const heartbeat = setInterval(() => {
+    try {
+      db.heartbeatSession(session.id);
+    } catch (error) {
+      logger.warn({ err: error, sessionId: session.id }, "session heartbeat failed");
+    }
+  }, 10_000);
+  heartbeat.unref();
   event(db, session, repository, "session.started", {
     adapterVersion: adapter.version,
     branch: before.branch,
@@ -444,7 +514,9 @@ async function runTracked(options: RunOptions): Promise<{
   let timelineStopped = false;
   process.stdout.write(`TokenFaxx session ${session.id} started\n`);
   process.stdout.write(
-    `Adapter metrics: exact tokens ${adapter.capabilities.supportsExactTokenUsage ? "supported" : "not reported"}; tool events ${adapter.capabilities.supportsToolEvents ? "supported" : "not reported"}\n`,
+    telemetry
+      ? "Adapter metrics: provider-reported structured usage enabled; raw events are not stored\n"
+      : `Adapter metrics: exact tokens ${adapter.capabilities.supportsExactTokenUsage ? "supported" : "not reported"}; tool events ${adapter.capabilities.supportsToolEvents ? "supported" : "not reported"}\n`,
   );
   let interrupted = false;
   let childExit: number | null = null;
@@ -453,11 +525,33 @@ async function runTracked(options: RunOptions): Promise<{
     childExit = await new Promise<number | null>((resolve, reject) => {
       const child = spawn(launch.command, launch.args, {
         cwd: repository,
-        stdio: "inherit",
+        stdio: telemetry ? ["inherit", "pipe", "inherit"] : "inherit",
         env: safeChildEnv(launch.env),
         shell: adapter.name === "custom",
         detached: adapter.name === "custom" && process.platform !== "win32",
       });
+      if (telemetry && child.stdout) {
+        let pending = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+          const text = chunk.toString("utf8");
+          process.stdout.write(text);
+          pending += text;
+          if (Buffer.byteLength(pending, "utf8") > 1_000_000) {
+            pending = "";
+            logger.warn(
+              { sessionId: session.id },
+              "discarded oversized provider telemetry line",
+            );
+            return;
+          }
+          const lines = pending.split(/\r?\n/);
+          pending = lines.pop() ?? "";
+          for (const line of lines) telemetry.consume(line);
+        });
+        child.stdout.on("end", () => {
+          if (pending.trim()) telemetry.consume(pending);
+        });
+      }
       const forward = (signal: NodeJS.Signals): void => {
         interrupted = true;
         if (child.killed) return;
@@ -493,6 +587,15 @@ async function runTracked(options: RunOptions): Promise<{
           : "failed",
       retryNumber: 0,
     });
+    const providerUsage = telemetry?.snapshot() ?? null;
+    if (providerUsage)
+      recordProviderUsage(db, session, repository, providerUsage, config);
+    else if (telemetry)
+      event(db, session, repository, "error", {
+        code: "PROVIDER_USAGE_UNAVAILABLE",
+        message: "The structured provider stream completed without a recognized usage event",
+        recoverable: true,
+      });
     const validations: ValidationResult[] = [];
     if (!interrupted)
       for (const [type, definition] of Object.entries(config.validation) as [
@@ -582,28 +685,8 @@ async function runTracked(options: RunOptions): Promise<{
       durationMs: Date.now() - started,
     });
     db.completeSession(session.id, status, childExit);
-    const evaluation = evaluate(
-      {
-        outcome,
-        taskId: session.taskId,
-        commitCount: delta.commits.length,
-        filesChanged: delta.filesChanged,
-        validations,
-        timeline: gitSamples,
-        taskProfile,
-        ...(options.maximumCostUsd !== undefined
-          ? { maximumCostUsd: options.maximumCostUsd }
-          : {}),
-        failedCommands: childExit === 0 ? 0 : 1,
-        commandCount: 1,
-        filesCreatedThenDeleted: Math.min(
-          delta.filesCreated,
-          delta.filesDeleted,
-        ),
-      },
-      config,
-    );
-    db.saveScore(session.id, evaluation);
+    const completedBundle = db.getBundle(session.id);
+    if (completedBundle) recalculateScore(db, completedBundle, config);
     const benchmarkVerdict = options.benchmark
       ? evaluateBenchmarkExpectations(
           options.benchmark.definition,
@@ -633,6 +716,7 @@ async function runTracked(options: RunOptions): Promise<{
       }
     }
     if (bundle) process.stdout.write(`${renderReport(bundle)}\n`);
+    clearInterval(heartbeat);
     db.close();
     return {
       id: session.id,
@@ -661,6 +745,7 @@ async function runTracked(options: RunOptions): Promise<{
       });
       db.completeSession(session.id, "failed", childExit);
     } finally {
+      clearInterval(heartbeat);
       db.close();
     }
     throw error;
@@ -724,11 +809,24 @@ program
   .option("--command <command>")
   .option("--task-id <id>")
   .option("--task <description>")
-  .option(
-    "--task-type <type>",
-    "bugfix, feature, refactor, migration, investigation, or other",
+  .addOption(
+    new Option("--task-type <type>").choices([
+      "bugfix",
+      "feature",
+      "refactor",
+      "migration",
+      "investigation",
+      "other",
+    ]),
   )
-  .option("--complexity <level>", "small, medium, large, or unknown")
+  .addOption(
+    new Option("--complexity <level>").choices([
+      "small",
+      "medium",
+      "large",
+      "unknown",
+    ]),
+  )
   .option("--benchmark-id <id>")
   .option("--maximum-cost-usd <amount>")
   .option(
@@ -753,9 +851,18 @@ program
       command,
     ) => {
       const { maximumCostUsd, ...runOptions } = options;
+      const parsedMaximumCost =
+        maximumCostUsd === undefined ? undefined : Number(maximumCostUsd);
+      if (
+        parsedMaximumCost !== undefined &&
+        (!Number.isFinite(parsedMaximumCost) || parsedMaximumCost < 0)
+      )
+        throw new Error("--maximum-cost-usd must be a finite nonnegative number");
       const result = await runTracked({
         ...runOptions,
-        ...(maximumCostUsd ? { maximumCostUsd: Number(maximumCostUsd) } : {}),
+        ...(parsedMaximumCost !== undefined
+          ? { maximumCostUsd: parsedMaximumCost }
+          : {}),
         passthroughArgs: command.args.slice(1),
       });
       process.exitCode = result.exitCode;
@@ -774,9 +881,17 @@ function outputBundle(bundle: SessionBundle, format: string): void {
 program
   .command("report")
   .option("--session <id>")
-  .option("--format <format>", "terminal, json, jsonl, or csv", "terminal")
+  .addOption(
+    new Option("--format <format>")
+      .choices(["terminal", "json", "jsonl", "csv"])
+      .default("terminal"),
+  )
   .option("--no-color")
-  .option("--analysis <mode>", "deterministic or openrouter", "deterministic")
+  .addOption(
+    new Option("--analysis <mode>")
+      .choices(["deterministic", "openrouter"])
+      .default("deterministic"),
+  )
   .option("--refresh-analysis", "request a new OpenRouter analysis")
   .action(
     async (options: {
@@ -785,6 +900,8 @@ program
       analysis: string;
       refreshAnalysis?: boolean;
     }) => {
+      if (options.refreshAnalysis && options.analysis !== "openrouter")
+        throw new Error("--refresh-analysis requires --analysis openrouter");
       const db = openDb();
       try {
         let bundle = db.getBundle(options.session);
@@ -944,7 +1061,11 @@ program
 program
   .command("export")
   .option("--session <id>")
-  .option("--format <format>", "json, jsonl, or csv", "json")
+  .addOption(
+    new Option("--format <format>")
+      .choices(["json", "jsonl", "csv"])
+      .default("json"),
+  )
   .action((options: { session?: string; format: string }) => {
     const db = openDb();
     const bundles = options.session
@@ -986,7 +1107,14 @@ program
 program
   .command("doctor")
   .description("Check the local TokenFaxx environment")
-  .action(async () => {
+  .option("--repair", "finalize sessions whose heartbeat is stale")
+  .option("--execute-config", "execute and validate tokenfaxx.config.ts")
+  .option("--stale-after-minutes <minutes>", "stale heartbeat threshold", "15")
+  .action(async (options: {
+    repair?: boolean;
+    executeConfig?: boolean;
+    staleAfterMinutes: string;
+  }) => {
     const directory = root();
     const checks: [boolean, string, string?][] = [];
     let loadedConfig: TokenFaxxConfig | null = null;
@@ -1010,14 +1138,24 @@ program
       "Current directory is a Git repository",
       "Run inside a Git repository",
     ]);
-    try {
-      loadedConfig = await loadConfig(directory);
-      checks.push([true, "TokenFaxx configuration is valid"]);
-    } catch (error) {
+    if (options.executeConfig) {
+      try {
+        loadedConfig = await loadConfig(directory);
+        checks.push([true, "TokenFaxx executable configuration is valid"]);
+      } catch (error) {
+        checks.push([
+          false,
+          "TokenFaxx configuration is invalid",
+          error instanceof Error ? error.message : String(error),
+        ]);
+      }
+    } else {
       checks.push([
-        false,
-        "TokenFaxx configuration is invalid",
-        error instanceof Error ? error.message : String(error),
+        true,
+        fs.existsSync(path.join(directory, "tokenfaxx.config.ts"))
+          ? "Executable configuration detected but not run"
+          : "No executable configuration found; defaults apply",
+        "Use --execute-config only after trusting this repository",
       ]);
     }
     if (
@@ -1036,9 +1174,57 @@ program
       ]);
     }
     try {
+      const staleMinutes = Number(options.staleAfterMinutes);
+      if (!Number.isFinite(staleMinutes) || staleMinutes <= 0)
+        throw new Error("--stale-after-minutes must be a positive number");
       const db = openDb();
-      db.close();
+      const staleBefore = new Date(
+        Date.now() - staleMinutes * 60_000,
+      ).toISOString();
+      const stale = db.listStaleRunningSessions(staleBefore);
       checks.push([true, "TokenFaxx database is accessible"]);
+      checks.push([
+        stale.length === 0,
+        stale.length === 0
+          ? "No stale running sessions"
+          : `${stale.length} stale running session(s) found`,
+        "Run tokenfaxx doctor --repair after confirming no agent process is still active",
+      ]);
+      if (options.repair)
+        for (const session of stale) {
+          const bundle = db.getBundle(session.id);
+          const repository = bundle?.events[0]?.repository;
+          if (!bundle || !repository) continue;
+          event(db, session, repository, "error", {
+            code: "STALE_SESSION_RECOVERED",
+            message: "Session heartbeat expired and was finalized by doctor --repair",
+            recoverable: true,
+          });
+          event(db, session, repository, "task.outcome", {
+            status: "attempted",
+            accepted: null,
+            reason: "Recovered after stale heartbeat",
+            evidence: [],
+          });
+          event(db, session, repository, "session.completed", {
+            status: "interrupted",
+            exitCode: null,
+            durationMs: Math.max(
+              0,
+              Date.parse(session.heartbeatAt ?? session.startedAt) -
+                Date.parse(session.startedAt),
+            ),
+          });
+          db.completeSession(
+            session.id,
+            "interrupted",
+            null,
+            session.heartbeatAt ?? session.startedAt,
+          );
+        }
+      if (options.repair && stale.length)
+        process.stdout.write(`Repaired ${stale.length} stale session(s).\n`);
+      db.close();
     } catch (error) {
       checks.push([
         false,

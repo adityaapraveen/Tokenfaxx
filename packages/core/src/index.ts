@@ -26,6 +26,7 @@ export interface SessionRecord {
   taskDescription: string | null;
   status: SessionStatus;
   startedAt: string;
+  heartbeatAt: string | null;
   completedAt: string | null;
   durationMs: number | null;
   childProcessExitCode: number | null;

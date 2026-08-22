@@ -27,6 +27,7 @@ export const sessions = sqliteTable(
     taskDescription: text("task_description"),
     status: text("status").notNull(),
     startedAt: text("started_at").notNull(),
+    heartbeatAt: text("heartbeat_at"),
     completedAt: text("completed_at"),
     durationMs: integer("duration_ms"),
     childProcessExitCode: integer("child_process_exit_code"),

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+export * from "./telemetry.js";
 
 export interface AdapterCapabilities {
   supportsExactTokenUsage: boolean;
@@ -12,6 +13,7 @@ export interface LaunchSpec {
   command: string;
   args: string[];
   env?: NodeJS.ProcessEnv;
+  structuredTelemetry?: "codex" | "claude";
 }
 export interface AgentAdapter {
   name: string;
@@ -66,6 +68,44 @@ export class ClaudeAdapter implements AgentAdapter {
     return { command: "claude", args: options.passthroughArgs };
   }
 }
+const structuredCapabilities: AdapterCapabilities = {
+  supportsExactTokenUsage: false,
+  supportsModelIdentification: true,
+  supportsToolEvents: false,
+  supportsLifecycleHooks: true,
+  supportsCostReporting: true,
+  supportsInteractiveMode: false,
+};
+export class CodexJsonAdapter implements AgentAdapter {
+  name = "codex-json";
+  version = "1.0.0";
+  capabilities = structuredCapabilities;
+  detect(): boolean {
+    return exists("codex");
+  }
+  launch(options: { passthroughArgs: string[] }): LaunchSpec {
+    return {
+      command: "codex",
+      args: ["exec", "--json", ...options.passthroughArgs],
+      structuredTelemetry: "codex",
+    };
+  }
+}
+export class ClaudeJsonAdapter implements AgentAdapter {
+  name = "claude-json";
+  version = "1.0.0";
+  capabilities = structuredCapabilities;
+  detect(): boolean {
+    return exists("claude");
+  }
+  launch(options: { passthroughArgs: string[] }): LaunchSpec {
+    return {
+      command: "claude",
+      args: ["-p", "--verbose", "--output-format", "stream-json", ...options.passthroughArgs],
+      structuredTelemetry: "claude",
+    };
+  }
+}
 export class SdkAdapter implements AgentAdapter {
   name = "sdk";
   version = "1.0.0";
@@ -88,7 +128,9 @@ export class SdkAdapter implements AgentAdapter {
 }
 export const adapters: AgentAdapter[] = [
   new CodexAdapter(),
+  new CodexJsonAdapter(),
   new ClaudeAdapter(),
+  new ClaudeJsonAdapter(),
   new ShellAdapter(),
   new SdkAdapter(),
 ];
