@@ -368,6 +368,7 @@ pnpm build
 
 Useful documents:
 
+- [Complete project and interview guide](docs/PROJECT_GUIDE.md)
 - [Product audit and roadmap](docs/PRODUCT_AUDIT.md)
 - [Adapter development](docs/ADAPTERS.md)
 - [Event schema](docs/EVENT_SCHEMA.md)
