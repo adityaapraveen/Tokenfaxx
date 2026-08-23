@@ -368,6 +368,8 @@ pnpm build
 
 Useful documents:
 
+- [Atlan AI-Native Builder interview guide](docs/ATLAN_AI_NATIVE_INTERVIEW_GUIDE.md)
+- [Complete project and interview guide](docs/PROJECT_GUIDE.md)
 - [Product audit and roadmap](docs/PRODUCT_AUDIT.md)
 - [Adapter development](docs/ADAPTERS.md)
 - [Event schema](docs/EVENT_SCHEMA.md)
