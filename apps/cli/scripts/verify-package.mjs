@@ -70,23 +70,23 @@ const run = (command, args, options = {}) => {
     env: commandEnvironment,
     ...options,
   });
-  if (result.status !== 0) {
+  if (result.error || result.status !== 0) {
     throw new Error(
-      `${command} ${args.join(" ")} failed (${result.status})\n${result.stdout}${result.stderr}`,
+      `${command} ${args.join(" ")} failed (${result.status ?? "not started"})\n${result.error?.message ?? ""}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
     );
   }
   return result.stdout.trim();
 };
+const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmSpawnOptions = process.platform === "win32" ? { shell: true } : {};
 
 try {
   const packOutput = JSON.parse(
-    run("npm", [
-      "pack",
-      outputDirectory,
-      "--json",
-      "--pack-destination",
-      temporary,
-    ]),
+    run(
+      npmCommand,
+      ["pack", outputDirectory, "--json", "--pack-destination", temporary],
+      npmSpawnOptions,
+    ),
   );
   const packed = packOutput[0];
   if (!packed?.filename) throw new Error("npm pack did not report a tarball");
@@ -101,7 +101,8 @@ try {
     path.join(installDirectory, "package.json"),
     '{"name":"tokenfaxx-install-smoke","private":true}\n',
   );
-  run("npm", ["install", tarball, "--ignore-scripts=false"], {
+  run(npmCommand, ["install", tarball, "--ignore-scripts=false"], {
+    ...npmSpawnOptions,
     cwd: installDirectory,
   });
   const installedCli = path.join(
