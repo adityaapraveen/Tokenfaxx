@@ -30,6 +30,9 @@ const common = {
   format: "esm",
   target: "node20",
   sourcemap: true,
+  define: {
+    __TOKENFAXX_VERSION__: JSON.stringify(sourcePackage.version),
+  },
   external: Object.keys(runtimeDependencies),
   logLevel: "info",
 };
@@ -55,6 +58,10 @@ const publishPackage = {
   description: sourcePackage.description,
   type: "module",
   bin: { tokenfaxx: "index.js" },
+  exports: {
+    ".": "./index.js",
+    "./config": "./config-api.js",
+  },
   engines: sourcePackage.engines,
   repository: {
     type: "git",
@@ -83,6 +90,12 @@ const license = path.join(repository, "LICENSE");
 if (fs.existsSync(license)) {
   publishPackage.license = "MIT";
   fs.copyFileSync(license, path.join(outputDirectory, "LICENSE"));
+}
+for (const file of ["CHANGELOG.md", "SECURITY.md"]) {
+  fs.copyFileSync(
+    path.join(repository, file),
+    path.join(outputDirectory, file),
+  );
 }
 
 fs.copyFileSync(

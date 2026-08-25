@@ -39,7 +39,7 @@ describe("benchmark command result", () => {
     expect(benchmarkExitCode(7, verdict(true))).toBe(7);
   });
 
-  it("runs an explicit setup command and rejects setup failures", () => {
+  it("records explicit setup success, failure, and timeout states", () => {
     expect(
       runBenchmarkSetup(
         `"${process.execPath}" -e "process.exit(0)"`,
@@ -47,13 +47,20 @@ describe("benchmark command result", () => {
         5_000,
       ),
     ).toEqual({ status: "passed", durationMs: expect.any(Number) });
-    expect(() =>
+    expect(
       runBenchmarkSetup(
         `"${process.execPath}" -e "process.exit(3)"`,
         process.cwd(),
         5_000,
       ),
-    ).toThrow(/exit code 3/);
+    ).toEqual({ status: "failed", durationMs: expect.any(Number) });
+    expect(
+      runBenchmarkSetup(
+        `"${process.execPath}" -e "setTimeout(() => {}, 10000)"`,
+        process.cwd(),
+        50,
+      ),
+    ).toEqual({ status: "timed-out", durationMs: expect.any(Number) });
   });
 
   it("refuses high-confidence comparison when benchmark definitions differ", () => {

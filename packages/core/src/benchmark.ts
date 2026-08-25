@@ -101,7 +101,7 @@ export const benchmarkVerdictSchema = z.object({
   definitionHash: z.string().regex(/^[a-f0-9]{64}$/),
   resolvedStartingCommit: z.string().min(1),
   setup: z.object({
-    status: z.enum(["passed", "not-configured"]),
+    status: z.enum(["passed", "not-configured", "failed", "timed-out"]),
     durationMs: z.number().int().nonnegative(),
   }),
   passed: z.boolean(),
@@ -115,7 +115,7 @@ export interface BenchmarkValidationObservation {
 }
 
 export interface BenchmarkSetupObservation {
-  status: "passed" | "not-configured";
+  status: "passed" | "not-configured" | "failed" | "timed-out";
   durationMs: number;
 }
 
@@ -207,7 +207,9 @@ export function evaluateBenchmarkExpectations(
     definitionHash,
     resolvedStartingCommit,
     setup,
-    passed: checks.every((check) => check.status === "met"),
+    passed:
+      (setup.status === "passed" || setup.status === "not-configured") &&
+      checks.every((check) => check.status === "met"),
     checks,
   });
 }

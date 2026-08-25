@@ -337,7 +337,7 @@ The database uses `better-sqlite3` and Drizzle ORM.
 - WAL mode improves local read/write behavior.
 - The directory is created with mode `0700` and the database is hardened to `0600` on POSIX where possible.
 - Event payloads use stable canonical JSON ordering.
-- Event and projection writes are atomic.
+- Event insertion and projections performed inside `appendEvent()` share one transaction; validation rows, Git snapshots, score replacement, and session finalization are separate lifecycle writes.
 - Retention deletes old sessions according to `privacy.retentionDays`.
 
 ### Current storage limitations
@@ -539,14 +539,14 @@ Provider integrations should use official event streams, SDK callbacks, or a doc
 
 ## 15. Adapter model
 
-| Adapter      | Launches interactively | Exact usage | Model ID | Tool events | Cost | Lifecycle hooks |
-| ------------ | ---------------------- | ----------- | -------- | ----------- | ---- | --------------- |
-| Codex CLI (`codex`) | yes | no | no | no | no | no |
-| Codex structured (`codex-json`) | no | provider-reported | when emitted | no | when emitted/configured | yes |
-| Claude CLI (`claude`) | yes | no | no | no | no | no |
-| Claude structured (`claude-json`) | no | provider-reported | when emitted | no | provider-reported/configured | yes |
-| Custom shell | yes | no | no | no | no | no |
-| SDK | no | yes | yes | yes | yes | yes |
+| Adapter                           | Launches interactively | Exact usage       | Model ID     | Tool events | Cost                         | Lifecycle hooks |
+| --------------------------------- | ---------------------- | ----------------- | ------------ | ----------- | ---------------------------- | --------------- |
+| Codex CLI (`codex`)               | yes                    | no                | no           | no          | no                           | no              |
+| Codex structured (`codex-json`)   | no                     | provider-reported | when emitted | no          | when emitted/configured      | yes             |
+| Claude CLI (`claude`)             | yes                    | no                | no           | no          | no                           | no              |
+| Claude structured (`claude-json`) | no                     | provider-reported | when emitted | no          | provider-reported/configured | yes             |
+| Custom shell                      | yes                    | no                | no           | no          | no                           | no              |
+| SDK                               | no                     | yes               | yes          | yes         | yes                          | yes             |
 
 An adapter implements:
 
@@ -892,7 +892,6 @@ tokenfaxx benchmark run \
 
 tokenfaxx benchmark run \
   --task benchmark.json \
-  --agent custom \
   --command "node agent.js"
 ```
 
@@ -1116,17 +1115,15 @@ npm install --global tokenfaxx
 tokenfaxx --version
 ```
 
-### Current publication status
+### Publication status
 
-As verified on 2026-08-20, `npm view tokenfaxx version` returns `E404`: the package is not public yet. The release artifact and verifier are prepared on the `agent/npm-release` branch, but publication still requires the npm account's 2FA/automation-token authorization.
-
-Before an interview demo, run:
+The public release pipeline builds, packs, clean-installs, and smoke-tests the exact CLI artifact before publishing it with npm provenance. Confirm the currently available release before an interview demo:
 
 ```bash
 npm view tokenfaxx version
 ```
 
-If it is still unpublished, use the development install and state that honestly.
+If registry access is unavailable, use the development install and state that limitation honestly.
 
 ### Development install
 
@@ -1634,7 +1631,7 @@ Memorize these points:
 3. Validation, acceptance, usage, attribution, and comparison are separate evidence dimensions.
 4. Missing values stay unavailable.
 5. CLI wrappers optimize adoption; SDK instrumentation optimizes accuracy.
-6. Events preserve history; projections support queries; their writes are atomic.
+6. Events preserve history; projections support queries; projections inside `appendEvent()` are atomic with their event.
 7. SQLite is a deliberate local-MVP decision.
 8. Benchmarks hash the definition and resolved starting commit and run in detached worktrees.
 9. AI receives bounded metadata, uses strict schemas and citations, and cannot override deterministic verdicts.

@@ -72,6 +72,22 @@ describe("benchmark verdicts", () => {
     ]);
   });
 
+  it("cannot pass when benchmark setup failed", () => {
+    const hash = hashBenchmarkDefinition(definition, "abc123");
+    const verdict = evaluateBenchmarkExpectations(
+      definition,
+      hash,
+      "abc123",
+      [
+        { type: "test", status: "passed" },
+        { type: "typecheck", status: "passed" },
+      ],
+      { status: "failed", durationMs: 10 },
+    );
+    expect(verdict.passed).toBe(false);
+    expect(verdict.setup.status).toBe("failed");
+  });
+
   it("distinguishes mismatched expectations from missing evidence", () => {
     const hash = hashBenchmarkDefinition(definition, "abc123");
     const verdict = evaluateBenchmarkExpectations(definition, hash, "abc123", [

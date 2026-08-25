@@ -43,17 +43,21 @@ import { createId, nowIso } from "@tokenfaxx/shared";
 import { TokenFaxxDatabase, type SessionBundle } from "@tokenfaxx/storage";
 import {
   assessBenchmarkComparison,
+  BENCHMARK_EXPECTATION_FAILED_EXIT_CODE,
   benchmarkExitCode,
   runBenchmarkSetup,
 } from "./benchmark.js";
 import { databasePath, loadConfig } from "./config.js";
 import { asCsv, renderReport, reportObject } from "./report.js";
 
+declare const __TOKENFAXX_VERSION__: string | undefined;
+const cliVersion =
+  typeof __TOKENFAXX_VERSION__ === "string" ? __TOKENFAXX_VERSION__ : "0.1.0";
 const logger = pino({ level: process.env.TOKENFAXX_LOG_LEVEL ?? "warn" });
 const program = new Command()
   .name("tokenfaxx")
   .description("Local-first observability and evaluation for coding agents")
-  .version("0.1.0");
+  .version(cliVersion);
 const root = (): string => path.resolve(process.cwd());
 
 function isDirectExecution(
@@ -77,12 +81,16 @@ const openDb = (storageRoot = root()): TokenFaxxDatabase =>
 
 function safeChildEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const blocked = /(KEY|TOKEN|SECRET|PASSWORD|PASS|CREDENTIAL|AUTH)/i;
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([name]) =>
-      name === "PATH" || name === "HOME" || name === "USER" || name === "SHELL" || !blocked.test(name),
+  return Object.fromEntries(
+    Object.entries({ ...process.env, ...extra }).filter(
+      ([name]) =>
+        name === "PATH" ||
+        name === "HOME" ||
+        name === "USER" ||
+        name === "SHELL" ||
+        !blocked.test(name),
     ),
   );
-  return { ...env, ...extra };
 }
 
 function event(
@@ -178,6 +186,7 @@ interface RunOptions {
     setup: BenchmarkSetupObservation;
   };
   maximumCostUsd?: number;
+  timeoutMs?: number;
   aiProfile?: boolean;
 }
 function sanitizedEvidenceBundle(
@@ -362,6 +371,111 @@ function recalculateScore(
   );
   db.saveScore(bundle.session.id, evaluation);
 }
+
+async function recordBenchmarkSetupFailure(options: {
+  agentName: string;
+  repository: string;
+  storageRoot: string;
+  config: TokenFaxxConfig;
+  benchmark: NonNullable<RunOptions["benchmark"]>;
+}): Promise<{
+  id: string;
+  exitCode: number;
+  benchmarkVerdict: BenchmarkVerdict;
+}> {
+  const git = new GitCollector(options.repository);
+  const [repositoryInfo, snapshot] = await Promise.all([
+    git.repositoryInfo(),
+    git.snapshot(),
+  ]);
+  const db = openDb(options.storageRoot);
+  try {
+    if (options.config.privacy.retentionDays)
+      db.applyRetention(options.config.privacy.retentionDays);
+    const adapter = adapters.find((item) => item.name === options.agentName);
+    const adapterVersion = adapter?.version ?? "unknown";
+    const session = db.createSession({
+      repository: options.repository,
+      projectName: options.config.project.name ?? repositoryInfo.name,
+      repositoryRemote: repositoryInfo.remote,
+      agent: options.agentName,
+      adapterVersion,
+      taskId: options.benchmark.definition.id,
+      taskDescription: options.benchmark.definition.description,
+    });
+    db.addGitSnapshot(session.id, "before", snapshot);
+    db.addGitSnapshot(session.id, "after", snapshot);
+    event(db, session, options.repository, "session.started", {
+      adapterVersion,
+      branch: snapshot.branch,
+      headSha: snapshot.headSha,
+    });
+    event(
+      db,
+      session,
+      options.repository,
+      "task.profiled",
+      taskProfileSchema.parse({
+        benchmarkId: options.benchmark.definition.id,
+        benchmarkDefinitionHashVersion: BENCHMARK_DEFINITION_HASH_VERSION,
+        benchmarkDefinitionHash: options.benchmark.definitionHash,
+        benchmarkStartingCommit: options.benchmark.resolvedStartingCommit,
+        taskType: "other",
+        validationCount: Object.keys(options.benchmark.definition.validation)
+          .length,
+        complexity: "unknown",
+        complexitySource: "benchmark",
+        tags: options.benchmark.definition.tags,
+        maximumCostUsd: options.benchmark.definition.maximumCostUsd,
+      }),
+    );
+    event(db, session, options.repository, "error", {
+      code: "BENCHMARK_SETUP_FAILURE",
+      message: `Benchmark setup ${options.benchmark.setup.status}`,
+      recoverable: false,
+    });
+    event(db, session, options.repository, "task.outcome", {
+      status: "failed",
+      accepted: null,
+      reason: `Benchmark setup ${options.benchmark.setup.status}`,
+      evidence: [`setup: ${options.benchmark.setup.status}`],
+    });
+    const verdict = evaluateBenchmarkExpectations(
+      options.benchmark.definition,
+      options.benchmark.definitionHash,
+      options.benchmark.resolvedStartingCommit,
+      [],
+      options.benchmark.setup,
+    );
+    event(
+      db,
+      session,
+      options.repository,
+      "benchmark.evaluated",
+      verdict as unknown as Record<string, unknown>,
+    );
+    event(db, session, options.repository, "session.completed", {
+      status: "failed",
+      exitCode: null,
+      durationMs: options.benchmark.setup.durationMs,
+    });
+    db.completeSession(session.id, "failed", null);
+    const bundle = db.getBundle(session.id);
+    if (bundle) {
+      recalculateScore(db, bundle, options.config);
+      const completed = db.getBundle(session.id);
+      if (completed) process.stdout.write(`${renderReport(completed)}\n`);
+    }
+    return {
+      id: session.id,
+      exitCode: BENCHMARK_EXPECTATION_FAILED_EXIT_CODE,
+      benchmarkVerdict: verdict,
+    };
+  } finally {
+    db.close();
+  }
+}
+
 async function runTracked(options: RunOptions): Promise<{
   id: string;
   exitCode: number;
@@ -411,7 +525,10 @@ async function runTracked(options: RunOptions): Promise<{
     try {
       db.heartbeatSession(session.id);
     } catch (error) {
-      logger.warn({ err: error, sessionId: session.id }, "session heartbeat failed");
+      logger.warn(
+        { err: error, sessionId: session.id },
+        "session heartbeat failed",
+      );
     }
   }, 10_000);
   heartbeat.unref();
@@ -519,7 +636,9 @@ async function runTracked(options: RunOptions): Promise<{
       : `Adapter metrics: exact tokens ${adapter.capabilities.supportsExactTokenUsage ? "supported" : "not reported"}; tool events ${adapter.capabilities.supportsToolEvents ? "supported" : "not reported"}\n`,
   );
   let interrupted = false;
+  let agentTimedOut = false;
   let childExit: number | null = null;
+  let recordedExit: number | null = null;
   const started = Date.now();
   try {
     childExit = await new Promise<number | null>((resolve, reject) => {
@@ -552,9 +671,8 @@ async function runTracked(options: RunOptions): Promise<{
           if (pending.trim()) telemetry.consume(pending);
         });
       }
-      const forward = (signal: NodeJS.Signals): void => {
-        interrupted = true;
-        if (child.killed) return;
+      const stopChild = (signal: NodeJS.Signals): void => {
+        if (child.killed && signal !== "SIGKILL") return;
         try {
           // Shell commands can create grandchildren. A dedicated POSIX process
           // group lets shutdown reach the whole command tree without signaling TokenFaxx.
@@ -565,39 +683,75 @@ async function runTracked(options: RunOptions): Promise<{
           child.kill(signal);
         }
       };
+      const forward = (signal: NodeJS.Signals): void => {
+        interrupted = true;
+        stopChild(signal);
+      };
       const onInt = (): void => forward("SIGINT");
       const onTerm = (): void => forward("SIGTERM");
-      process.once("SIGINT", onInt);
-      process.once("SIGTERM", onTerm);
-      child.once("error", reject);
-      child.once("close", (code) => {
+      let forceKill: NodeJS.Timeout | undefined;
+      const timeout =
+        options.timeoutMs === undefined
+          ? undefined
+          : setTimeout(() => {
+              agentTimedOut = true;
+              stopChild("SIGTERM");
+              forceKill = setTimeout(() => stopChild("SIGKILL"), 5_000);
+              forceKill.unref();
+            }, options.timeoutMs);
+      timeout?.unref();
+      const cleanup = (): void => {
         process.off("SIGINT", onInt);
         process.off("SIGTERM", onTerm);
+        if (timeout) clearTimeout(timeout);
+        if (forceKill) clearTimeout(forceKill);
+      };
+      process.once("SIGINT", onInt);
+      process.once("SIGTERM", onTerm);
+      child.once("error", (error) => {
+        cleanup();
+        reject(error);
+      });
+      child.once("close", (code) => {
+        cleanup();
         resolve(code);
       });
     });
+    recordedExit = childExit;
+    const providerFailure = telemetry?.failure() ?? null;
     event(db, session, repository, "command.completed", {
       category: "agent",
-      exitCode: childExit,
+      exitCode: recordedExit,
       durationMs: Date.now() - started,
       status: interrupted
         ? "interrupted"
-        : childExit === 0
-          ? "passed"
-          : "failed",
+        : agentTimedOut
+          ? "timed-out"
+          : providerFailure
+            ? "failed"
+            : recordedExit === 0
+              ? "passed"
+              : "failed",
       retryNumber: 0,
     });
+    if (providerFailure)
+      event(db, session, repository, "error", {
+        code: "PROVIDER_TERMINAL_FAILURE",
+        message: providerFailure.source,
+        recoverable: false,
+      });
     const providerUsage = telemetry?.snapshot() ?? null;
     if (providerUsage)
       recordProviderUsage(db, session, repository, providerUsage, config);
     else if (telemetry)
       event(db, session, repository, "error", {
         code: "PROVIDER_USAGE_UNAVAILABLE",
-        message: "The structured provider stream completed without a recognized usage event",
+        message:
+          "The structured provider stream completed without a recognized usage event",
         recoverable: true,
       });
     const validations: ValidationResult[] = [];
-    if (!interrupted)
+    if (!interrupted && !agentTimedOut)
       for (const [type, definition] of Object.entries(config.validation) as [
         ValidationType,
         {
@@ -656,23 +810,43 @@ async function runTracked(options: RunOptions): Promise<{
       event(db, session, repository, "file.changed", file);
     const status = interrupted
       ? "interrupted"
-      : childExit === 0
-        ? "completed"
-        : "failed";
+      : agentTimedOut || providerFailure || recordedExit !== 0
+        ? "failed"
+        : "completed";
+    const changeExpected = new Set([
+      "bugfix",
+      "feature",
+      "refactor",
+      "migration",
+    ]).has(taskProfile.taskType);
+    const hasChangeEvidence =
+      delta.commits.length > 0 || delta.files.length > 0;
+    const missingExpectedChange = changeExpected && !hasChangeEvidence;
     const outcome: TaskOutcomeStatus = interrupted
       ? "attempted"
-      : childExit !== 0
+      : agentTimedOut || providerFailure || recordedExit !== 0
         ? "failed"
-        : validations.length === 0
-          ? "completed-unverified"
-          : validations.every((item) => item.status === "passed")
-            ? "completed-validated"
-            : "partially-completed";
+        : missingExpectedChange
+          ? "attempted"
+          : validations.length === 0
+            ? "completed-unverified"
+            : validations.every((item) => item.status === "passed")
+              ? "completed-validated"
+              : "partially-completed";
     event(db, session, repository, "task.outcome", {
       status: outcome,
       accepted: null,
-      reason: interrupted ? "Session interrupted" : undefined,
+      reason: interrupted
+        ? "Session interrupted"
+        : agentTimedOut
+          ? `Agent exceeded the ${options.timeoutMs}ms time limit`
+          : providerFailure
+            ? providerFailure.source
+            : missingExpectedChange
+              ? `No Git change evidence was observed for a ${taskProfile.taskType} task`
+              : undefined,
       evidence: [
+        ...(missingExpectedChange ? ["No Git changes were observed"] : []),
         ...(delta.commits.length
           ? [`${delta.commits.length} commit(s) observed`]
           : []),
@@ -681,10 +855,10 @@ async function runTracked(options: RunOptions): Promise<{
     });
     event(db, session, repository, "session.completed", {
       status,
-      exitCode: childExit,
+      exitCode: recordedExit,
       durationMs: Date.now() - started,
     });
-    db.completeSession(session.id, status, childExit);
+    db.completeSession(session.id, status, recordedExit);
     const completedBundle = db.getBundle(session.id);
     if (completedBundle) recalculateScore(db, completedBundle, config);
     const benchmarkVerdict = options.benchmark
@@ -720,7 +894,13 @@ async function runTracked(options: RunOptions): Promise<{
     db.close();
     return {
       id: session.id,
-      exitCode: interrupted ? 130 : (childExit ?? 1),
+      exitCode: interrupted
+        ? 130
+        : agentTimedOut
+          ? 124
+          : providerFailure
+            ? 1
+            : (recordedExit ?? 1),
       benchmarkVerdict,
     };
   } catch (error) {
@@ -783,7 +963,7 @@ program
       : "    // Add only commands you have reviewed and want TokenFaxx to execute.";
     fs.writeFileSync(
       configFile,
-      `import { defineConfig } from "@tokenfaxx/core";\n\nexport default defineConfig({\n  project: { name: ${JSON.stringify(path.basename(directory))} },\n  validation: {\n${validations}\n  },\n  privacy: { storePrompts: false, storeResponses: false, storeTerminalOutput: false, storeDiffContents: false, retentionDays: 90 },\n  analysis: { enabled: false, provider: "openrouter", model: "openai/gpt-4o-mini", maxCostUsd: 0.05 }\n});\n`,
+      `export default {\n  project: { name: ${JSON.stringify(path.basename(directory))} },\n  validation: {\n${validations}\n  },\n  privacy: { storePrompts: false, storeResponses: false, storeTerminalOutput: false, storeDiffContents: false, retentionDays: 90 },\n  analysis: { enabled: false, provider: "openrouter", model: "openai/gpt-4o-mini", maxCostUsd: 0.05 }\n};\n`,
       { flag: "wx" },
     );
     const ignore = path.join(directory, ".gitignore");
@@ -830,6 +1010,10 @@ program
   .option("--benchmark-id <id>")
   .option("--maximum-cost-usd <amount>")
   .option(
+    "--timeout-ms <milliseconds>",
+    "terminate the agent after this positive number of milliseconds",
+  )
+  .option(
     "--ai-profile",
     "send the task description to OpenRouter for bounded task profiling",
   )
@@ -846,24 +1030,35 @@ program
         complexity?: string;
         benchmarkId?: string;
         maximumCostUsd?: string;
+        timeoutMs?: string;
         aiProfile?: boolean;
       },
       command,
     ) => {
-      const { maximumCostUsd, ...runOptions } = options;
+      const { maximumCostUsd, timeoutMs, ...runOptions } = options;
       const parsedMaximumCost =
         maximumCostUsd === undefined ? undefined : Number(maximumCostUsd);
+      const parsedTimeout =
+        timeoutMs === undefined ? undefined : Number(timeoutMs);
       if (
         parsedMaximumCost !== undefined &&
         (!Number.isFinite(parsedMaximumCost) || parsedMaximumCost < 0)
       )
-        throw new Error("--maximum-cost-usd must be a finite nonnegative number");
+        throw new Error(
+          "--maximum-cost-usd must be a finite nonnegative number",
+        );
+      if (
+        parsedTimeout !== undefined &&
+        (!Number.isSafeInteger(parsedTimeout) || parsedTimeout <= 0)
+      )
+        throw new Error("--timeout-ms must be a positive integer");
       const result = await runTracked({
         ...runOptions,
         ...(parsedMaximumCost !== undefined
           ? { maximumCostUsd: parsedMaximumCost }
           : {}),
-        passthroughArgs: command.args.slice(1),
+        ...(parsedTimeout !== undefined ? { timeoutMs: parsedTimeout } : {}),
+        passthroughArgs: [...command.args],
       });
       process.exitCode = result.exitCode;
     },
@@ -1110,157 +1305,166 @@ program
   .option("--repair", "finalize sessions whose heartbeat is stale")
   .option("--execute-config", "execute and validate tokenfaxx.config.ts")
   .option("--stale-after-minutes <minutes>", "stale heartbeat threshold", "15")
-  .action(async (options: {
-    repair?: boolean;
-    executeConfig?: boolean;
-    staleAfterMinutes: string;
-  }) => {
-    const directory = root();
-    const checks: [boolean, string, string?][] = [];
-    let loadedConfig: TokenFaxxConfig | null = null;
-    const major = Number(process.versions.node.split(".")[0]);
-    checks.push([
-      major >= 20,
-      `Node.js ${process.versions.node}`,
-      "Install Node.js 20 or newer",
-    ]);
-    for (const executable of ["git"] as const) {
-      const found =
-        spawnSync(executable, ["--version"], { stdio: "ignore" }).status === 0;
+  .action(
+    async (options: {
+      repair?: boolean;
+      executeConfig?: boolean;
+      staleAfterMinutes: string;
+    }) => {
+      const directory = root();
+      const checks: [boolean, string, string?][] = [];
+      let loadedConfig: TokenFaxxConfig | null = null;
+      const major = Number(process.versions.node.split(".")[0]);
       checks.push([
-        found,
-        `${executable} ${found ? "available" : "not found"}`,
-        `Install ${executable} and add it to PATH`,
+        major >= 20,
+        `Node.js ${process.versions.node}`,
+        "Install Node.js 20 or newer",
       ]);
-    }
-    checks.push([
-      await new GitCollector(directory).isRepository(),
-      "Current directory is a Git repository",
-      "Run inside a Git repository",
-    ]);
-    if (options.executeConfig) {
+      for (const executable of ["git"] as const) {
+        const found =
+          spawnSync(executable, ["--version"], { stdio: "ignore" }).status ===
+          0;
+        checks.push([
+          found,
+          `${executable} ${found ? "available" : "not found"}`,
+          `Install ${executable} and add it to PATH`,
+        ]);
+      }
+      checks.push([
+        await new GitCollector(directory).isRepository(),
+        "Current directory is a Git repository",
+        "Run inside a Git repository",
+      ]);
+      if (options.executeConfig) {
+        try {
+          loadedConfig = await loadConfig(directory);
+          checks.push([true, "TokenFaxx executable configuration is valid"]);
+        } catch (error) {
+          checks.push([
+            false,
+            "TokenFaxx configuration is invalid",
+            error instanceof Error ? error.message : String(error),
+          ]);
+        }
+      } else {
+        checks.push([
+          true,
+          fs.existsSync(path.join(directory, "tokenfaxx.config.ts"))
+            ? "Executable configuration detected but not run"
+            : "No executable configuration found; defaults apply",
+          "Use --execute-config only after trusting this repository",
+        ]);
+      }
+      if (
+        loadedConfig &&
+        Object.values(loadedConfig.validation).some(
+          (validation) =>
+            validation?.enabled &&
+            /(^|\s)pnpm(?=\s|$)/.test(validation.command),
+        )
+      ) {
+        const found =
+          spawnSync("pnpm", ["--version"], { stdio: "ignore" }).status === 0;
+        checks.push([
+          found,
+          `pnpm ${found ? "available" : "not found"}`,
+          "A configured validation uses pnpm; install it and add it to PATH",
+        ]);
+      }
       try {
-        loadedConfig = await loadConfig(directory);
-        checks.push([true, "TokenFaxx executable configuration is valid"]);
+        const staleMinutes = Number(options.staleAfterMinutes);
+        if (!Number.isFinite(staleMinutes) || staleMinutes <= 0)
+          throw new Error("--stale-after-minutes must be a positive number");
+        const db = openDb();
+        const staleBefore = new Date(
+          Date.now() - staleMinutes * 60_000,
+        ).toISOString();
+        const stale = db.listStaleRunningSessions(staleBefore);
+        checks.push([true, "TokenFaxx database is accessible"]);
+        checks.push([
+          stale.length === 0,
+          stale.length === 0
+            ? "No stale running sessions"
+            : `${stale.length} stale running session(s) found`,
+          "Run tokenfaxx doctor --repair after confirming no agent process is still active",
+        ]);
+        if (options.repair)
+          for (const session of stale) {
+            const bundle = db.getBundle(session.id);
+            const repository = bundle?.events[0]?.repository;
+            if (!bundle || !repository) continue;
+            event(db, session, repository, "error", {
+              code: "STALE_SESSION_RECOVERED",
+              message:
+                "Session heartbeat expired and was finalized by doctor --repair",
+              recoverable: true,
+            });
+            event(db, session, repository, "task.outcome", {
+              status: "attempted",
+              accepted: null,
+              reason: "Recovered after stale heartbeat",
+              evidence: [],
+            });
+            event(db, session, repository, "session.completed", {
+              status: "interrupted",
+              exitCode: null,
+              durationMs: Math.max(
+                0,
+                Date.parse(session.heartbeatAt ?? session.startedAt) -
+                  Date.parse(session.startedAt),
+              ),
+            });
+            db.completeSession(
+              session.id,
+              "interrupted",
+              null,
+              session.heartbeatAt ?? session.startedAt,
+            );
+          }
+        if (options.repair && stale.length)
+          process.stdout.write(`Repaired ${stale.length} stale session(s).\n`);
+        db.close();
       } catch (error) {
         checks.push([
           false,
-          "TokenFaxx configuration is invalid",
+          "TokenFaxx database is inaccessible",
           error instanceof Error ? error.message : String(error),
         ]);
       }
-    } else {
-      checks.push([
-        true,
-        fs.existsSync(path.join(directory, "tokenfaxx.config.ts"))
-          ? "Executable configuration detected but not run"
-          : "No executable configuration found; defaults apply",
-        "Use --execute-config only after trusting this repository",
-      ]);
-    }
-    if (
-      loadedConfig &&
-      Object.values(loadedConfig.validation).some(
-        (validation) =>
-          validation?.enabled && /(^|\s)pnpm(?=\s|$)/.test(validation.command),
-      )
-    ) {
-      const found =
-        spawnSync("pnpm", ["--version"], { stdio: "ignore" }).status === 0;
-      checks.push([
-        found,
-        `pnpm ${found ? "available" : "not found"}`,
-        "A configured validation uses pnpm; install it and add it to PATH",
-      ]);
-    }
-    try {
-      const staleMinutes = Number(options.staleAfterMinutes);
-      if (!Number.isFinite(staleMinutes) || staleMinutes <= 0)
-        throw new Error("--stale-after-minutes must be a positive number");
-      const db = openDb();
-      const staleBefore = new Date(
-        Date.now() - staleMinutes * 60_000,
-      ).toISOString();
-      const stale = db.listStaleRunningSessions(staleBefore);
-      checks.push([true, "TokenFaxx database is accessible"]);
-      checks.push([
-        stale.length === 0,
-        stale.length === 0
-          ? "No stale running sessions"
-          : `${stale.length} stale running session(s) found`,
-        "Run tokenfaxx doctor --repair after confirming no agent process is still active",
-      ]);
-      if (options.repair)
-        for (const session of stale) {
-          const bundle = db.getBundle(session.id);
-          const repository = bundle?.events[0]?.repository;
-          if (!bundle || !repository) continue;
-          event(db, session, repository, "error", {
-            code: "STALE_SESSION_RECOVERED",
-            message: "Session heartbeat expired and was finalized by doctor --repair",
-            recoverable: true,
-          });
-          event(db, session, repository, "task.outcome", {
-            status: "attempted",
-            accepted: null,
-            reason: "Recovered after stale heartbeat",
-            evidence: [],
-          });
-          event(db, session, repository, "session.completed", {
-            status: "interrupted",
-            exitCode: null,
-            durationMs: Math.max(
-              0,
-              Date.parse(session.heartbeatAt ?? session.startedAt) -
-                Date.parse(session.startedAt),
-            ),
-          });
-          db.completeSession(
-            session.id,
-            "interrupted",
-            null,
-            session.heartbeatAt ?? session.startedAt,
-          );
-        }
-      if (options.repair && stale.length)
-        process.stdout.write(`Repaired ${stale.length} stale session(s).\n`);
-      db.close();
-    } catch (error) {
-      checks.push([
-        false,
-        "TokenFaxx database is inaccessible",
-        error instanceof Error ? error.message : String(error),
-      ]);
-    }
-    for (const adapter of adapters.filter((a) => a.name !== "sdk"))
-      checks.push([
-        adapter.detect(),
-        `${adapter.name} adapter ${adapter.detect() ? "detected" : "executable not found"}`,
-        `Install ${adapter.name} or choose another adapter`,
-      ]);
-    if (loadedConfig?.analysis.enabled)
-      checks.push([
-        Boolean(process.env.OPENROUTER_API_KEY),
-        "OpenRouter analysis API key is configured",
-        "Set OPENROUTER_API_KEY or disable analysis",
-      ]);
-    for (const [ok, message, fix] of checks)
+      for (const adapter of adapters.filter((a) => a.name !== "sdk"))
+        checks.push([
+          adapter.detect(),
+          `${adapter.name} adapter ${adapter.detect() ? "detected" : "executable not found"}`,
+          `Install ${adapter.name} or choose another adapter`,
+        ]);
+      if (loadedConfig?.analysis.enabled)
+        checks.push([
+          Boolean(process.env.OPENROUTER_API_KEY),
+          "OpenRouter analysis API key is configured",
+          "Set OPENROUTER_API_KEY or disable analysis",
+        ]);
+      for (const [ok, message, fix] of checks)
+        process.stdout.write(
+          `${ok ? "✓" : "⚠"} ${message}${!ok && fix ? ` — ${fix}` : ""}\n`,
+        );
       process.stdout.write(
-        `${ok ? "✓" : "⚠"} ${message}${!ok && fix ? ` — ${fix}` : ""}\n`,
+        "Privacy: no telemetry; prompts, responses, terminal output, source, diffs, environment values, and secrets are not stored.\n",
       );
-    process.stdout.write(
-      "Privacy: no telemetry; prompts, responses, terminal output, source, diffs, environment values, and secrets are not stored.\n",
-    );
-  });
+    },
+  );
 
 const benchmark = program.command("benchmark");
 benchmark
   .command("run")
   .requiredOption("--task <file>")
-  .requiredOption("--agent <adapter>")
+  .option("--agent <adapter>")
   .option("--command <command>")
   .action(
-    async (options: { task: string; agent: string; command?: string }) => {
+    async (options: { task: string; agent?: string; command?: string }) => {
+      if (Boolean(options.agent) === Boolean(options.command))
+        throw new Error(
+          "Specify exactly one of --agent <adapter> or --command <command>",
+        );
       const primary = root();
       const definition = benchmarkDefinitionSchema.parse(
         JSON.parse(fs.readFileSync(path.resolve(options.task), "utf8")),
@@ -1288,7 +1492,7 @@ benchmark
           "add",
           "--detach",
           worktree,
-          definition.startingCommit,
+          resolvedStartingCommit,
         ]);
         const setup = runBenchmarkSetup(
           definition.setup,
@@ -1310,24 +1514,39 @@ benchmark
             ]),
           ),
         };
-        const result = await runTracked({
-          agent: options.agent,
-          ...(options.command ? { command: options.command } : {}),
-          taskId: definition.id,
-          task: definition.description,
-          repository: worktree,
-          storageRoot: primary,
-          config,
-          benchmark: {
-            definition,
-            definitionHash,
-            resolvedStartingCommit,
-            setup,
-          },
-          ...(definition.maximumCostUsd !== undefined
-            ? { maximumCostUsd: definition.maximumCostUsd }
-            : {}),
-        });
+        const benchmarkContext = {
+          definition,
+          definitionHash,
+          resolvedStartingCommit,
+          setup,
+        };
+        const result =
+          setup.status === "failed" || setup.status === "timed-out"
+            ? await recordBenchmarkSetupFailure({
+                agentName: options.command ? "custom" : options.agent!,
+                repository: worktree,
+                storageRoot: primary,
+                config,
+                benchmark: benchmarkContext,
+              })
+            : await runTracked({
+                ...(options.command
+                  ? { command: options.command }
+                  : {
+                      agent: options.agent!,
+                      passthroughArgs: [definition.description],
+                    }),
+                taskId: definition.id,
+                task: definition.description,
+                timeoutMs: definition.timeoutMs,
+                repository: worktree,
+                storageRoot: primary,
+                config,
+                benchmark: benchmarkContext,
+                ...(definition.maximumCostUsd !== undefined
+                  ? { maximumCostUsd: definition.maximumCostUsd }
+                  : {}),
+              });
         if (!result.benchmarkVerdict)
           throw new Error("Benchmark completed without producing a verdict");
         const exitCode = benchmarkExitCode(
@@ -1374,4 +1593,10 @@ if (isDirectExecution(process.argv[1])) {
   });
 }
 
-export { isDirectExecution, runTracked, sanitizedEvidenceBundle };
+export {
+  isDirectExecution,
+  program,
+  runTracked,
+  safeChildEnv,
+  sanitizedEvidenceBundle,
+};

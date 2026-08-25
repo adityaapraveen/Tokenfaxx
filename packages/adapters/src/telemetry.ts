@@ -1,3 +1,7 @@
+export interface ProviderTerminalFailure {
+  source: string;
+}
+
 export interface ProviderUsageSnapshot {
   provider: "openai" | "anthropic";
   model: string | null;
@@ -34,7 +38,10 @@ function usageFrom(
     reasoning: string[];
     total: string[];
   },
-): Omit<ProviderUsageSnapshot, "provider" | "model" | "estimatedCostUsd" | "source"> | null {
+): Omit<
+  ProviderUsageSnapshot,
+  "provider" | "model" | "estimatedCostUsd" | "source"
+> | null {
   const item = record(value);
   if (!item) return null;
   const first = (keys: string[]): number | null => {
@@ -80,13 +87,18 @@ const codexAliases = {
 const claudeAliases = {
   input: ["input_tokens", "inputTokens"],
   output: ["output_tokens", "outputTokens"],
-  cached: ["cache_read_input_tokens", "cached_input_tokens", "cachedInputTokens"],
+  cached: [
+    "cache_read_input_tokens",
+    "cached_input_tokens",
+    "cachedInputTokens",
+  ],
   reasoning: ["reasoning_tokens", "reasoningTokens"],
   total: ["total_tokens", "totalTokens"],
 };
 
 export class StructuredTelemetryCollector {
   private snapshotValue: ProviderUsageSnapshot | null = null;
+  private failureValue: ProviderTerminalFailure | null = null;
   private readonly claudeMessages = new Map<string, ProviderUsageSnapshot>();
 
   constructor(private readonly provider: "codex" | "claude") {}
@@ -104,13 +116,22 @@ export class StructuredTelemetryCollector {
     else this.consumeClaude(item);
   }
 
+  failure(): ProviderTerminalFailure | null {
+    return this.failureValue ? { ...this.failureValue } : null;
+  }
+
   snapshot(): ProviderUsageSnapshot | null {
     if (this.snapshotValue) return { ...this.snapshotValue };
-    if (this.provider !== "claude" || this.claudeMessages.size === 0) return null;
+    if (this.provider !== "claude" || this.claudeMessages.size === 0)
+      return null;
     const rows = [...this.claudeMessages.values()];
     const sum = (key: keyof ProviderUsageSnapshot): number | null => {
-      const values = rows.map((row) => row[key]).filter((value): value is number => typeof value === "number");
-      return values.length ? values.reduce((total, value) => total + value, 0) : null;
+      const values = rows
+        .map((row) => row[key])
+        .filter((value): value is number => typeof value === "number");
+      return values.length
+        ? values.reduce((total, value) => total + value, 0)
+        : null;
     };
     const inputTokens = sum("inputTokens");
     const outputTokens = sum("outputTokens");
@@ -133,13 +154,17 @@ export class StructuredTelemetryCollector {
   private consumeCodex(item: Record<string, unknown>): void {
     const params = record(item.params);
     const turn = record(item.turn) ?? record(params?.turn);
+    const type = text(item.type) ?? text(item.method);
+    if (type === "turn.failed" || type === "error") {
+      this.failureValue = { source: `Codex JSONL ${type}` };
+      return;
+    }
     const tokenUsage = record(params?.tokenUsage) ?? record(params?.usage);
     const usage =
       usageFrom(item.usage, codexAliases) ??
       usageFrom(turn?.usage, codexAliases) ??
       usageFrom(tokenUsage?.total, codexAliases) ??
       usageFrom(tokenUsage, codexAliases);
-    const type = text(item.type) ?? text(item.method);
     if (
       !usage ||
       (type !== "turn.completed" && type !== "thread/tokenUsage/updated")
@@ -150,7 +175,10 @@ export class StructuredTelemetryCollector {
       model: text(item.model) ?? text(turn?.model) ?? text(params?.model),
       ...usage,
       estimatedCostUsd: money(item.total_cost_usd) ?? money(item.cost_usd),
-      source: type === "thread/tokenUsage/updated" ? "Codex app-server token usage" : "Codex JSONL turn usage",
+      source:
+        type === "thread/tokenUsage/updated"
+          ? "Codex app-server token usage"
+          : "Codex JSONL turn usage",
     };
   }
 
@@ -158,6 +186,9 @@ export class StructuredTelemetryCollector {
     const type = text(item.type);
     const message = record(item.message);
     if (type === "result") {
+      if (item.is_error === true) {
+        this.failureValue = { source: "Claude stream-json error result" };
+      }
       const usage = usageFrom(item.usage, claudeAliases);
       if (!usage) return;
       this.snapshotValue = {
