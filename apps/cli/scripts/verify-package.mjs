@@ -78,16 +78,15 @@ const run = (command, args, options = {}) => {
   return result.stdout.trim();
 };
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmSpawnOptions = process.platform === "win32" ? { shell: true } : {};
 
 try {
   const packOutput = JSON.parse(
-    run(npmCommand, [
-      "pack",
-      outputDirectory,
-      "--json",
-      "--pack-destination",
-      temporary,
-    ]),
+    run(
+      npmCommand,
+      ["pack", outputDirectory, "--json", "--pack-destination", temporary],
+      npmSpawnOptions,
+    ),
   );
   const packed = packOutput[0];
   if (!packed?.filename) throw new Error("npm pack did not report a tarball");
@@ -103,6 +102,7 @@ try {
     '{"name":"tokenfaxx-install-smoke","private":true}\n',
   );
   run(npmCommand, ["install", tarball, "--ignore-scripts=false"], {
+    ...npmSpawnOptions,
     cwd: installDirectory,
   });
   const installedCli = path.join(
