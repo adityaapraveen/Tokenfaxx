@@ -31,12 +31,13 @@ export function runBenchmarkSetup(
     killSignal: "SIGTERM",
   });
   const durationMs = Date.now() - startedAt;
-  if (result.error)
-    throw new Error(`Benchmark setup could not run: ${result.error.message}`);
-  if (result.status !== 0)
-    throw new Error(
-      `Benchmark setup failed with ${result.signal ? `signal ${result.signal}` : `exit code ${result.status ?? "unknown"}`}`,
-    );
+  if (
+    (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT" ||
+    (result.signal !== null && durationMs >= timeoutMs)
+  )
+    return { status: "timed-out", durationMs };
+  if (result.error || result.status !== 0)
+    return { status: "failed", durationMs };
   return { status: "passed", durationMs };
 }
 

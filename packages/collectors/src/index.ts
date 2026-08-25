@@ -42,6 +42,9 @@ export interface GitDelta {
   remainsUncommitted: boolean;
 }
 
+const isTokenFaxxInternalPath = (filePath: string): boolean =>
+  filePath === ".tokenfaxx" || filePath.startsWith(".tokenfaxx/");
+
 export class GitCollector {
   constructor(private readonly repository: string) {}
   async isRepository(): Promise<boolean> {
@@ -84,14 +87,17 @@ export class GitCollector {
       git.revparse(["HEAD"]).catch(() => ""),
       git.diffSummary().catch(() => ({ insertions: 0, deletions: 0 })),
     ]);
+    const files = status.files.filter(
+      (file) => !isTokenFaxxInternalPath(file.path),
+    );
     return {
       branch: branch.current || null,
       headSha: head.trim() || null,
-      changedFileCount: status.files.length,
+      changedFileCount: files.length,
       linesAdded: diff.insertions,
       linesDeleted: diff.deletions,
-      uncommittedChanges: !status.isClean(),
-      files: status.files.map((f) => ({
+      uncommittedChanges: files.length > 0,
+      files: files.map((f) => ({
         path: f.path,
         index: f.index,
         workingTree: f.working_dir,
@@ -110,6 +116,7 @@ export class GitCollector {
       sequence,
       headSha: head.trim() || null,
       changedFiles: status.files
+        .filter((item) => !isTokenFaxxInternalPath(item.path))
         .map((item) => ({
           path: item.path,
           index: item.index,
@@ -159,7 +166,11 @@ export class GitCollector {
         `${file.index}:${file.workingTree}`,
       ]),
     );
-    const changedPaths = new Set(summary.files.map((file) => file.file));
+    const changedPaths = new Set(
+      summary.files
+        .map((file) => file.file)
+        .filter((file) => !isTokenFaxxInternalPath(file)),
+    );
     for (const path of new Set([...beforeFiles.keys(), ...afterFiles.keys()])) {
       if (beforeFiles.get(path) !== afterFiles.get(path))
         changedPaths.add(path);
@@ -287,7 +298,9 @@ function parseValidation(
   if (resultFile) {
     try {
       const repositoryRoot = fs.realpathSync(cwd);
-      const resolvedResult = fs.realpathSync(path.resolve(repositoryRoot, resultFile));
+      const resolvedResult = fs.realpathSync(
+        path.resolve(repositoryRoot, resultFile),
+      );
       const relative = path.relative(repositoryRoot, resolvedResult);
       if (
         relative === ".." ||
@@ -421,8 +434,13 @@ function parseValidation(
 function safeValidationEnv(): NodeJS.ProcessEnv {
   const blocked = /(KEY|TOKEN|SECRET|PASSWORD|PASS|CREDENTIAL|AUTH)/i;
   return Object.fromEntries(
-    Object.entries(process.env).filter(([name]) =>
-      name === "PATH" || name === "HOME" || name === "USER" || name === "SHELL" || !blocked.test(name),
+    Object.entries(process.env).filter(
+      ([name]) =>
+        name === "PATH" ||
+        name === "HOME" ||
+        name === "USER" ||
+        name === "SHELL" ||
+        !blocked.test(name),
     ),
   );
 }

@@ -43,6 +43,10 @@ export class ShellAdapter implements AgentAdapter {
   launch(options: { command?: string; passthroughArgs: string[] }): LaunchSpec {
     if (!options.command)
       throw new Error("The custom adapter requires --command");
+    if (options.passthroughArgs.length > 0)
+      throw new Error(
+        "The custom adapter does not accept arguments after --; include them in --command",
+      );
     return { command: options.command, args: [] };
   }
 }
@@ -101,7 +105,13 @@ export class ClaudeJsonAdapter implements AgentAdapter {
   launch(options: { passthroughArgs: string[] }): LaunchSpec {
     return {
       command: "claude",
-      args: ["-p", "--verbose", "--output-format", "stream-json", ...options.passthroughArgs],
+      args: [
+        "-p",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+        ...options.passthroughArgs,
+      ],
       structuredTelemetry: "claude",
     };
   }

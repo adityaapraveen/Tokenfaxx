@@ -693,7 +693,7 @@ The current workload is one local process and one local database. Microservices 
 | Duplicate same completion      | No-op                                             | Safe caller retry                                   |
 | Conflicting completion         | Reject                                            | Terminal state must be stable                       |
 | OpenRouter analysis fails      | Deterministic report remains                      | AI is optional                                      |
-| Benchmark setup fails          | Stop and preserve worktree                        | Avoid misleading verdict                            |
+| Benchmark setup fails          | Persist failure and preserve worktree             | Avoid launching agent or losing evidence            |
 | Benchmark evidence missing     | Expectation is `missing`, not false observation   | Absence is not failure evidence                     |
 
 ## Concurrency
@@ -716,13 +716,13 @@ A crash between those steps can leave partial lifecycle evidence. The production
 
 ## Known benchmark defects and limitations
 
-- `timeoutMs` currently bounds setup and validation commands, not the coding-agent child process.
-- Worktree checkout uses the original `startingCommit` expression after hashing its resolved SHA, creating a small resolution/checkout race; it should check out the resolved SHA.
-- The documented custom benchmark form currently supplies both `agent` and `command`, while `runTracked()` rejects that combination. This needs an end-to-end regression test and normalized custom-adapter invocation.
-- Setup failure happens before the tracked session and therefore does not currently persist a complete failed benchmark verdict.
+- `timeoutMs` bounds setup, the coding-agent child process, and validation commands; timed-out agents are terminated and recorded with exit code 124.
+- Worktree checkout uses the same resolved SHA included in the benchmark hash, avoiding mutable ref resolution races.
+- Custom benchmarks use `--command` instead of combining `--agent custom` with `--command`.
+- Setup failure is persisted as a failed session and deterministic failed benchmark verdict without launching the coding agent.
 - `benchmark compare` lists matching task IDs; it is not yet a verified statistical cohort comparison.
 
-These are good examples to discuss when asked about bugs or what you would fix next. Do not demo the custom benchmark path until it is corrected.
+The final item remains a good example to discuss when asked about limitations or what you would fix next.
 
 ## Migration strategy
 

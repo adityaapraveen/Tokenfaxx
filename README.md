@@ -4,7 +4,7 @@ TokenFaxx is a local-first CLI and TypeScript SDK for observing and evaluating c
 
 TokenFaxx evaluates a session—not a developer. Token counts and lines changed are context, never standalone productivity measures.
 
-> Project status: alpha (`0.1.0`). The local CLI/SDK vertical slice works, including opt-in provider-reported usage for structured Codex and Claude runs, but hosted collaboration, broad provider compatibility, CI/PR enrichment, and production release automation are not complete. See [the product audit and roadmap](docs/PRODUCT_AUDIT.md).
+> Project status: alpha (`0.1.0`). The local CLI/SDK vertical slice works, including opt-in provider-reported usage for structured Codex and Claude runs, but hosted collaboration, broad provider compatibility, and CI/PR enrichment are not complete. See [the product audit and roadmap](docs/PRODUCT_AUDIT.md).
 
 ## What works today
 
@@ -28,9 +28,20 @@ TokenFaxx evaluates a session—not a developer. Token counts and lines changed 
 
 ## Install
 
-The `tokenfaxx` package is not public on npm yet (`npm view tokenfaxx version` currently returns `E404`), so `npx tokenfaxx@latest` and `npm install --global tokenfaxx` will not work until the first release is published. Use the development install below for now.
+Run TokenFaxx without installing it globally:
 
-After publication, users will be able to run `npx tokenfaxx@latest init` or install it globally. Global npm installations are scoped to the active Node installation; NVM users must install it separately for each Node version.
+```bash
+npx tokenfaxx@latest --help
+```
+
+Or install the CLI globally:
+
+```bash
+npm install --global tokenfaxx@latest
+tokenfaxx --version
+```
+
+Global npm installations are scoped to the active Node installation; NVM users must install it separately for each Node version.
 
 ## Install for development
 
@@ -46,7 +57,7 @@ npm link
 tokenfaxx --version
 ```
 
-If `pnpm` is already installed at the required version, skip the two Corepack commands. The npm link is the supported install path until the package is published.
+If `pnpm` is already installed at the required version, skip the two Corepack commands. Use this linked checkout when contributing to TokenFaxx itself.
 
 ## Start tracking a repository
 
@@ -63,9 +74,7 @@ For a trusted project, `tokenfaxx init --yes` enables detected `test`, `build`, 
 Example configuration:
 
 ```ts
-import { defineConfig } from "@tokenfaxx/core";
-
-export default defineConfig({
+export default {
   project: { name: "my-project" },
   validation: {
     test: {
@@ -110,7 +119,7 @@ export default defineConfig({
       },
     ],
   },
-});
+};
 ```
 
 Run an agent:
@@ -136,8 +145,8 @@ Interactive input, output, color, and signals are preserved. Raw terminal output
 For provider-reported token usage, use the non-interactive structured adapters and put the provider prompt/arguments after `--`:
 
 ```bash
-tokenfaxx run --agent codex-json --complexity medium -- "Fix notification migration"
-tokenfaxx run --agent claude-json --complexity medium -- "Fix notification migration"
+tokenfaxx run --agent codex-json --complexity medium --timeout-ms 900000 -- "Fix notification migration"
+tokenfaxx run --agent claude-json --complexity medium --timeout-ms 900000 -- "Fix notification migration"
 ```
 
 These launch `codex exec --json` and `claude -p --verbose --output-format stream-json`. TokenFaxx parses only bounded usage fields, forwards but does not store the JSONL stream, keeps the latest cumulative Codex snapshot, and deduplicates Claude assistant usage by message ID. Interactive `codex` and `claude` adapters remain available when terminal UX is more important than usage telemetry.
@@ -243,7 +252,9 @@ Package responsibilities:
 
 ## SDK instrumentation
 
-CLI wrappers cannot reliably derive exact usage from decorative terminal output. For accurate tokens, models, cost, and tool events, record official provider response fields through the SDK:
+The first public npm release contains the CLI. `@tokenfaxx/sdk` is currently available to monorepo contributors only and will be published separately after its package boundary and compatibility contract are finalized.
+
+CLI wrappers cannot reliably derive exact usage from decorative terminal output. For accurate tokens, models, cost, and tool events, workspace consumers can record official provider response fields through the SDK:
 
 ```ts
 import { defineConfig } from "@tokenfaxx/core";
@@ -376,6 +387,7 @@ Useful documents:
 - [Benchmark evaluation](docs/BENCHMARKS.md)
 - [Privacy and security](docs/PRIVACY.md)
 - [OpenRouter analysis](docs/OPENROUTER_ANALYSIS.md)
+- [Release process](docs/RELEASING.md)
 
 ## Troubleshooting
 
@@ -390,4 +402,4 @@ Useful documents:
 
 ## License and releases
 
-TokenFaxx is available under the [MIT License](LICENSE). The prepared release artifact is a standalone CLI bundle: internal workspace packages are bundled, while audited third-party runtime dependencies remain normal npm dependencies. The package has not yet been published to npm.
+TokenFaxx is available under the [MIT License](LICENSE). The npm release is a standalone CLI bundle: internal workspace packages are bundled, while audited third-party runtime dependencies remain normal npm dependencies.

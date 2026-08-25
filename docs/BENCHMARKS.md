@@ -31,7 +31,7 @@ At least one of `testsPass`, `buildPasses`, `lintPasses`, or `typecheckPasses` i
 
 An expectation set to `false` means failure is the expected observation. A skipped, absent, or unrecognized validation remains `missing`; it does not satisfy either `true` or `false`.
 
-`setup` is optional and runs inside the detached worktree before the agent. Use it when ignored dependencies or generated artifacts are required. The command is part of the definition hash, and successful setup status/duration is stored in the verdict. A failed or timed-out setup stops the benchmark and preserves the worktree; it cannot produce a misleading agent verdict.
+`setup` is optional and runs inside the detached worktree before the agent. Use it when ignored dependencies or generated artifacts are required. The command is part of the definition hash, and successful setup status/duration is stored in the verdict. A failed or timed-out setup stops the benchmark, preserves the worktree, and persists a failed session and benchmark verdict without launching the agent.
 
 ## Lifecycle and reproducibility
 
@@ -62,7 +62,6 @@ To evaluate any reviewed local command instead of an installed agent CLI:
 ```bash
 tokenfaxx benchmark run \
   --task examples/benchmark.json \
-  --agent custom \
   --command "node ./my-agent.js"
 ```
 
